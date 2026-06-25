@@ -16,6 +16,12 @@ Telegram bot for channel giveaways with a simple browser setup panel.
 
 ## Fast Start For Client
 
+For a detailed non-technical manual, open:
+
+```text
+USER_GUIDE.md
+```
+
 1. Unzip the project.
 2. Open `START.command` on macOS or `START.bat` on Windows.
 3. The browser setup panel opens automatically.
