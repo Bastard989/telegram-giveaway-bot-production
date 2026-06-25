@@ -37,8 +37,9 @@ On Windows, open `START.bat`.
 5. Click `Сохранить настройки`.
 6. Click `Установить нужные файлы`.
 7. Click `Подготовить базу данных`.
-8. Click `Запустить с сохранёнными настройками`.
-9. Open Telegram and send `/start` to the bot.
+8. Click `Проверить окружение`.
+9. Click `Запустить с сохранёнными настройками`.
+10. Open Telegram and send `/start` to the bot.
 
 No separate database program is required.
 
@@ -147,3 +148,20 @@ Do not send:
 - `runtime/*.log`
 
 Before delivery, rotate any token that was ever shared in chat.
+
+Before sending a working folder to a client, click:
+
+```text
+Очистить токен перед передачей
+```
+
+The release zip built by `scripts/build_release_zip.py` does not include `.env`,
+`.venv`, local runtime data, logs, or SQLite database files.
+
+## Tests
+
+Run unit tests from the project virtual environment:
+
+```bash
+.venv/bin/python -m unittest discover -s tests
+```

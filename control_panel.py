@@ -1,8 +1,11 @@
 import atexit
 import html
+import importlib.util
 import os
 import signal
 import socket
+import shutil
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -11,6 +14,8 @@ import webbrowser
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.error import URLError
+from urllib.request import urlopen
 from urllib.parse import parse_qs, urlencode, urlparse
 
 
@@ -22,6 +27,7 @@ PANEL_PID_PATH = RUNTIME_DIR / "control-panel.pid"
 PANEL_PORT_PATH = RUNTIME_DIR / "control-panel.port"
 BOT_LOG_PATH = RUNTIME_DIR / "bot.log"
 PANEL_LOG_PATH = RUNTIME_DIR / "control-panel.log"
+BACKUP_DIR = RUNTIME_DIR / "backups"
 
 ENV_KEYS = [
     "BOT_TOKEN",
@@ -229,6 +235,26 @@ def prepare_database() -> str:
     return "Локальная база данных подготовлена. Она хранится в папке runtime внутри проекта."
 
 
+def backup_database() -> str:
+    config = read_env()
+    db_path = database_file_path(config)
+    if not db_path or not db_path.exists():
+        return "База данных ещё не подготовлена, backup создать нельзя."
+
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    backup_path = BACKUP_DIR / f"{db_path.stem}-{stamp}{db_path.suffix or '.sqlite3'}"
+    shutil.copy2(db_path, backup_path)
+    return f"Backup базы создан: {backup_path.relative_to(BASE_DIR)}"
+
+
+def clear_saved_token() -> str:
+    config = read_env()
+    config["BOT_TOKEN"] = ""
+    write_env(config)
+    return "Токен очищен. Перед передачей клиенту также используйте release zip: он не содержит .env."
+
+
 def database_file_path(config: dict[str, str]) -> Path | None:
     database_url = config.get("DATABASE_URL", "")
     if not database_url.startswith("sqlite://"):
@@ -253,6 +279,54 @@ def validate_config(config: dict[str, str]) -> list[str]:
     if not config.get("OWNERS") and not config.get("OWNER_USERNAMES"):
         errors.append("Укажите, кто будет управлять ботом: Telegram ID или username.")
     return errors
+
+
+def dependency_is_installed(module_name: str) -> bool:
+    return importlib.util.find_spec(module_name) is not None
+
+
+def check_token_valid(token: str) -> tuple[bool, str]:
+    if not token:
+        return False, "токен не указан"
+    try:
+        with urlopen(f"https://api.telegram.org/bot{token}/getMe", timeout=8) as response:
+            body = response.read().decode("utf-8", errors="replace")
+    except URLError as exc:
+        return False, f"не удалось проверить через Telegram API: {exc.reason}"
+    except Exception as exc:
+        return False, f"не удалось проверить: {exc}"
+    if '"ok":true' in body:
+        return True, "токен валиден"
+    return False, "Telegram API не подтвердил токен"
+
+
+def check_database_available(config: dict[str, str]) -> tuple[bool, str]:
+    db_path = database_file_path(config)
+    if not db_path:
+        return False, "поддерживается автоматическая проверка только SQLite"
+    if not db_path.exists():
+        return False, "файл базы ещё не создан"
+    try:
+        with sqlite3.connect(db_path) as connection:
+            connection.execute("SELECT 1").fetchone()
+    except sqlite3.Error as exc:
+        return False, f"ошибка SQLite: {exc}"
+    return True, "база доступна"
+
+
+def check_environment() -> str:
+    config = read_env()
+    dependencies = ["aiogram", "aiohttp", "aiosqlite", "pytz", "tortoise"]
+    missing_dependencies = [name for name in dependencies if not dependency_is_installed(name)]
+    token_ok, token_message = check_token_valid(config.get("BOT_TOKEN", ""))
+    db_ok, db_message = check_database_available(config)
+    lines = [
+        f"Python найден: {sys.version.split()[0]} ({sys.executable})",
+        "Зависимости установлены: " + ("да" if not missing_dependencies else "нет: " + ", ".join(missing_dependencies)),
+        "Токен валиден: " + ("да" if token_ok else "нет") + f" ({token_message})",
+        "База доступна: " + ("да" if db_ok else "нет") + f" ({db_message})",
+    ]
+    return "\n".join(lines)
 
 
 def bot_is_running() -> bool:
@@ -519,6 +593,8 @@ def render_page(message: str = "") -> str:
     <form class="actions" method="post">
       <button class="secondary" formaction="/install-deps">Установить нужные файлы</button>
       <button class="warning" formaction="/prepare-database">Подготовить базу данных</button>
+      <button class="secondary" formaction="/check-environment">Проверить окружение</button>
+      <button class="secondary" formaction="/backup-database">Backup базы</button>
     </form>
     <p>Сначала нажмите установку нужных файлов, потом подготовку базы данных. База создаётся автоматически внутри папки проекта.</p>
   </section>
@@ -529,6 +605,7 @@ def render_page(message: str = "") -> str:
       <button formaction="/start-bot">Запустить с сохранёнными настройками</button>
       <button class="stop" formaction="/stop-bot">Остановить бота</button>
       <button class="secondary" formaction="/restart-bot">Перезапустить бота</button>
+      <button class="warning" formaction="/clear-token">Очистить токен перед передачей</button>
     </form>
     <p>Если бот уже был запущен, новый запуск сначала остановит старый процесс.</p>
   </section>
@@ -587,6 +664,10 @@ class Handler(BaseHTTPRequestHandler):
                 return install_dependencies()
             if path == "/prepare-database":
                 return prepare_database()
+            if path == "/check-environment":
+                return check_environment()
+            if path == "/backup-database":
+                return backup_database()
             if path == "/start-bot":
                 return start_bot()
             if path == "/stop-bot":
@@ -594,6 +675,9 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/restart-bot":
                 stop_bot()
                 return start_bot()
+            if path == "/clear-token":
+                stop_bot()
+                return clear_saved_token()
             return "Неизвестное действие."
         except Exception as exc:
             log(f"Action failed: {exc}")

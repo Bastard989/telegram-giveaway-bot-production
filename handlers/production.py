@@ -441,12 +441,16 @@ async def add_participant(giveaway_id: str, user: types.User, captcha_passed: bo
         return False
 
 
-async def check_subscriptions(giveaway_id: str, user_id: int) -> tuple[bool, list[str]]:
-    conditions = await GiveawayCondition().get_conditions(giveaway_id)
-    strict_conditions = [
+def strict_subscription_conditions(conditions: list[dict]) -> list[dict]:
+    return [
         condition for condition in conditions
         if condition.get("condition_type", "strict") == "strict"
     ]
+
+
+async def check_subscriptions(giveaway_id: str, user_id: int) -> tuple[bool, list[str]]:
+    conditions = await GiveawayCondition().get_conditions(giveaway_id)
+    strict_conditions = strict_subscription_conditions(conditions)
     missing = []
     if not strict_conditions:
         return True, []

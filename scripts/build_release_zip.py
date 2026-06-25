@@ -14,6 +14,7 @@ EXCLUDED_DIRS = {
     "dist",
     "scripts",
     "runtime",
+    "tests",
 }
 
 EXCLUDED_FILES = {
@@ -44,7 +45,6 @@ EXCLUDED_SUFFIXES = {
 def is_excluded(path: Path) -> bool:
     relative = path.relative_to(BASE_DIR)
     parts = set(relative.parts)
-    relative_text = relative.as_posix()
 
     if path.name in EXCLUDED_FILES:
         return True
