@@ -12,12 +12,19 @@ EXCLUDED_DIRS = {
     "__pycache__",
     ".pytest_cache",
     "dist",
+    "scripts",
+    "runtime",
 }
 
 EXCLUDED_FILES = {
     ".env",
+    ".env.example",
     ".DS_Store",
+    ".gitignore",
+    "ARCHITECTURE.md",
+    "BUILD_ZIP.command",
     "fsm_state.json",
+    "README.md",
 }
 
 EXCLUDED_SUFFIXES = {
