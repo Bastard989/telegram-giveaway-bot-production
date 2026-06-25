@@ -23,7 +23,13 @@ For a detailed non-technical manual, open:
 ```
 
 1. Unzip the project.
-2. Open `START.command` on macOS or `START.bat` on Windows.
+2. On macOS, run the startup command from the unzipped folder that contains `START.command`:
+
+```bash
+xattr -dr com.apple.quarantine . 2>/dev/null || true; chmod +x ./START.command; ./START.command
+```
+
+On Windows, open `START.bat`.
 3. The browser setup panel opens automatically.
 4. Fill:
    - BotFather token.
