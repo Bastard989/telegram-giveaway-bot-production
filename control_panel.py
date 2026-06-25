@@ -275,9 +275,9 @@ def validate_config(config: dict[str, str]) -> list[str]:
     if not config.get("BOT_TOKEN"):
         errors.append("Укажите токен бота из BotFather.")
     if not config.get("DATABASE_URL"):
-        errors.append("Укажите DATABASE_URL или нажмите Prepare PostgreSQL.")
+        errors.append("Подготовьте базу данных кнопкой ниже.")
     if not config.get("OWNERS") and not config.get("OWNER_USERNAMES"):
-        errors.append("Укажите Telegram ID владельца или username владельца.")
+        errors.append("Укажите, кто будет управлять ботом: Telegram ID или username.")
     return errors
 
 
@@ -332,8 +332,6 @@ def render_page(message: str = "") -> str:
     running = bot_is_running()
     status = "запущен" if running else "остановлен"
     status_class = "ok" if running else "muted"
-    bot_logs = read_tail(BOT_LOG_PATH) or "Логи бота появятся после запуска."
-    panel_logs = read_tail(PANEL_LOG_PATH, 80)
 
     def value(key: str) -> str:
         return html.escape(config.get(key, ""), quote=True)
@@ -346,7 +344,7 @@ def render_page(message: str = "") -> str:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Telegram Giveaway Bot Control Center</title>
+  <title>Панель запуска бота</title>
   <style>
     :root {{
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Arial, sans-serif;
@@ -407,18 +405,16 @@ def render_page(message: str = "") -> str:
       background: #eef7ff;
       white-space: pre-wrap;
     }}
-    pre {{
-      margin: 0;
-      min-height: 170px;
-      max-height: 360px;
-      overflow: auto;
-      padding: 13px;
+    details {{
+      margin-top: 14px;
+      border: 1px solid #d8e0e8;
       border-radius: 6px;
-      background: #101820;
-      color: #d9e6f2;
-      font-size: 13px;
-      line-height: 1.45;
-      white-space: pre-wrap;
+      padding: 12px;
+      background: #fafbfc;
+    }}
+    summary {{
+      cursor: pointer;
+      font-weight: 750;
     }}
     @media (max-width: 760px) {{
       body {{ padding: 14px; }}
@@ -430,53 +426,30 @@ def render_page(message: str = "") -> str:
 </head>
 <body>
 <main>
-  <h1>Telegram Giveaway Bot</h1>
-  <p>Control Center для запуска из zip: настройка, PostgreSQL, зависимости и процессы в одном месте.</p>
+  <h1>Панель запуска бота</h1>
+  <p>Заполните основные поля, подготовьте базу данных и запустите бота. В код заходить не нужно.</p>
   <div class="status {status_class}">Бот: {status}</div>
   {message_html}
 
   <section>
-    <h2>1. Настройки</h2>
+    <h2>1. Основные настройки</h2>
     <form method="post" action="/save">
       <label>Токен бота</label>
       <input name="BOT_TOKEN" type="password" autocomplete="off" placeholder="Вставьте токен из BotFather">
-      <div class="hint">{html.escape(token_hint)}</div>
+      <div class="hint">Токен выдает BotFather при создании Telegram-бота. {html.escape(token_hint)}</div>
 
+      <label>Кто будет управлять ботом</label>
+      <p>Заполните одно из двух полей ниже. Telegram ID надежнее, username проще.</p>
       <div class="row">
         <div>
-          <label>Telegram ID владельца</label>
+          <label>Telegram ID</label>
           <input name="OWNERS" value="{value('OWNERS')}" placeholder="123456789">
-          <div class="hint">Лучший вариант. Можно узнать у @userinfobot.</div>
+          <div class="hint">Можно узнать в Telegram у @userinfobot.</div>
         </div>
         <div>
-          <label>Username владельца</label>
-          <input name="OWNER_USERNAMES" value="{value('OWNER_USERNAMES')}" placeholder="username без @">
-        </div>
-      </div>
-
-      <label>DATABASE_URL</label>
-      <input name="DATABASE_URL" value="{value('DATABASE_URL')}">
-      <div class="hint">Если не знаете что писать, нажмите Prepare PostgreSQL ниже.</div>
-
-      <div class="row">
-        <div>
-          <label>PostgreSQL port</label>
-          <input name="POSTGRES_PORT" value="{value('POSTGRES_PORT')}">
-        </div>
-        <div>
-          <label>PostgreSQL database</label>
-          <input name="POSTGRES_DB" value="{value('POSTGRES_DB')}">
-        </div>
-      </div>
-
-      <div class="row">
-        <div>
-          <label>PostgreSQL user</label>
-          <input name="POSTGRES_USER" value="{value('POSTGRES_USER')}">
-        </div>
-        <div>
-          <label>PostgreSQL password</label>
-          <input name="POSTGRES_PASSWORD" value="{value('POSTGRES_PASSWORD')}">
+          <label>Username</label>
+          <input name="OWNER_USERNAMES" value="{value('OWNER_USERNAMES')}" placeholder="например: myusername">
+          <div class="hint">Пишите без @. Можно оставить пустым, если указан Telegram ID.</div>
         </div>
       </div>
 
@@ -484,15 +457,47 @@ def render_page(message: str = "") -> str:
         <div>
           <label>Часовой пояс</label>
           <input name="TIMEZONE" value="{value('TIMEZONE')}">
+          <div class="hint">Обычно оставьте Europe/Moscow.</div>
         </div>
         <div>
-          <label>Ключевое слово комментария</label>
+          <label>Фраза для участия через комментарии</label>
           <input name="COMMENT_GIVEAWAY_KEYWORD" value="{value('COMMENT_GIVEAWAY_KEYWORD')}">
+          <div class="hint">Например: Участвую.</div>
         </div>
       </div>
 
       <label>Текст стартового меню</label>
       <input name="START_TEXT" value="{value('START_TEXT')}">
+      <div class="hint">Этот текст видит владелец, когда пишет боту /start.</div>
+
+      <details>
+        <summary>Дополнительные настройки базы данных</summary>
+        <label>Адрес базы данных</label>
+        <input name="DATABASE_URL" value="{value('DATABASE_URL')}">
+        <div class="hint">Обычно менять не нужно. Кнопка подготовки базы заполнит это поле сама.</div>
+
+        <div class="row">
+          <div>
+            <label>Порт базы</label>
+            <input name="POSTGRES_PORT" value="{value('POSTGRES_PORT')}">
+          </div>
+          <div>
+            <label>Название базы</label>
+            <input name="POSTGRES_DB" value="{value('POSTGRES_DB')}">
+          </div>
+        </div>
+
+        <div class="row">
+          <div>
+            <label>Логин базы</label>
+            <input name="POSTGRES_USER" value="{value('POSTGRES_USER')}">
+          </div>
+          <div>
+            <label>Пароль базы</label>
+            <input name="POSTGRES_PASSWORD" value="{value('POSTGRES_PASSWORD')}">
+          </div>
+        </div>
+      </details>
 
       <div class="actions">
         <button type="submit">Сохранить настройки</button>
@@ -503,30 +508,20 @@ def render_page(message: str = "") -> str:
   <section>
     <h2>2. Подготовка</h2>
     <form class="actions" method="post">
-      <button class="secondary" formaction="/install-deps">Установить зависимости</button>
-      <button class="warning" formaction="/prepare-postgres">Prepare PostgreSQL</button>
+      <button class="secondary" formaction="/install-deps">Установить нужные файлы</button>
+      <button class="warning" formaction="/prepare-postgres">Подготовить базу данных</button>
     </form>
-    <p>PostgreSQL хранит данные в папке проекта: <b>runtime/postgres-data</b>. Для этой кнопки нужен Docker Desktop.</p>
+    <p>Сначала нажмите установку нужных файлов, потом подготовку базы данных. Для базы нужен Docker Desktop.</p>
   </section>
 
   <section>
-    <h2>3. Процесс бота</h2>
+    <h2>3. Управление ботом</h2>
     <form class="actions" method="post">
       <button formaction="/start-bot">Запустить бота</button>
       <button class="stop" formaction="/stop-bot">Остановить бота</button>
       <button class="secondary" formaction="/restart-bot">Перезапустить бота</button>
     </form>
-    <p>При запуске нового процесса старый процесс бота останавливается. При закрытии Control Center дочерний процесс бота тоже останавливается.</p>
-  </section>
-
-  <section>
-    <h2>Логи бота</h2>
-    <pre>{html.escape(bot_logs)}</pre>
-  </section>
-
-  <section>
-    <h2>Логи панели</h2>
-    <pre>{html.escape(panel_logs or 'Логи панели появятся после действий.')}</pre>
+    <p>Если бот уже был запущен, новый запуск сначала остановит старый процесс.</p>
   </section>
 </main>
 </body>

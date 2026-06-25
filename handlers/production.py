@@ -52,6 +52,7 @@ class AdminStates(StatesGroup):
     add_condition_type = State()
     add_condition_channel = State()
     add_discussion_group = State()
+    manual_winner = State()
 
 
 class CaptchaStates(StatesGroup):
@@ -112,6 +113,7 @@ def giveaway_actions(callback_value: str, status: str) -> InlineKeyboardMarkup:
         markup.add(
             InlineKeyboardButton("Статистика", callback_data=f"admin:stats:{callback_value}"),
             InlineKeyboardButton("Экспорт участников CSV", callback_data=f"admin:export:{callback_value}"),
+            InlineKeyboardButton("Выбрать победителя вручную", callback_data=f"admin:winner:manual:{callback_value}"),
             InlineKeyboardButton("Завершить сейчас", callback_data=f"admin:finish:{callback_value}"),
             InlineKeyboardButton("Остановить", callback_data=f"admin:stop:{callback_value}"),
         )
@@ -490,6 +492,66 @@ async def finish_giveaway(giveaway: GiveAway, reason: str = "schedule") -> list[
     await giveaway.save()
     await notify_finish(giveaway, winners, len(participants), too_few=False)
     logger.info("Giveaway %s finished by %s", giveaway.callback_value, reason)
+    return winners
+
+
+async def finish_giveaway_with_manual_winner(giveaway: GiveAway, manual_winner: dict) -> list[dict]:
+    if giveaway.finished_at:
+        return await GiveawayWinner().get_winners(giveaway.callback_value)
+
+    participants = await GiveawayParticipant().get_participants(giveaway.callback_value)
+    other_participants = [
+        participant for participant in participants
+        if participant["user_id"] != manual_winner["user_id"]
+    ]
+    secure_random.shuffle(other_participants)
+
+    await GiveawayWinner().delete_winners(giveaway.callback_value)
+
+    winners = [{**manual_winner, "place": 1, "is_reserve": False}]
+    await GiveawayWinner().add_winner(
+        giveaway_callback_value=giveaway.callback_value,
+        user_id=manual_winner["user_id"],
+        username=manual_winner["username"],
+        first_name=manual_winner["first_name"],
+        last_name=manual_winner["last_name"],
+        place=1,
+        is_reserve=False,
+    )
+
+    remaining_main_count = max(giveaway.winners_count - 1, 0)
+    selected_main = other_participants[:remaining_main_count]
+    selected_reserve = other_participants[remaining_main_count : remaining_main_count + giveaway.reserve_winners_count]
+
+    for place, participant in enumerate(selected_main, start=2):
+        await GiveawayWinner().add_winner(
+            giveaway_callback_value=giveaway.callback_value,
+            user_id=participant["user_id"],
+            username=participant["username"],
+            first_name=participant["first_name"],
+            last_name=participant["last_name"],
+            place=place,
+            is_reserve=False,
+        )
+        winners.append({**participant, "place": place, "is_reserve": False})
+
+    for place, participant in enumerate(selected_reserve, start=1):
+        await GiveawayWinner().add_winner(
+            giveaway_callback_value=giveaway.callback_value,
+            user_id=participant["user_id"],
+            username=participant["username"],
+            first_name=participant["first_name"],
+            last_name=participant["last_name"],
+            place=place,
+            is_reserve=True,
+        )
+        winners.append({**participant, "place": place, "is_reserve": True})
+
+    giveaway.run_status = False
+    giveaway.finished_at = datetime.now(timezone_info)
+    await giveaway.save()
+    await notify_finish(giveaway, winners, len(participants), too_few=False)
+    logger.info("Giveaway %s finished with manual winner %s", giveaway.callback_value, manual_winner["user_id"])
     return winners
 
 
@@ -1017,6 +1079,71 @@ async def finish_now(callback: types.CallbackQuery):
     await finish_giveaway(giveaway, reason="manual")
     await callback.answer("Розыгрыш завершен.")
     await show_giveaway(callback.message, await get_giveaway(giveaway.callback_value))
+
+
+@dp.callback_query_handler(lambda c: c.data.startswith("admin:winner:manual:"), state="*")
+async def ask_manual_winner(callback: types.CallbackQuery, state: FSMContext):
+    giveaway_id = callback.data.rsplit(":", 1)[1]
+    giveaway = await get_giveaway(giveaway_id)
+    if not giveaway:
+        await callback.answer("Розыгрыш не найден", show_alert=True)
+        return
+    if not giveaway.run_status or giveaway.finished_at:
+        await callback.answer("Ручной выбор доступен только для активного розыгрыша.", show_alert=True)
+        return
+
+    await state.update_data(giveaway_id=giveaway_id)
+    await AdminStates.manual_winner.set()
+    await callback.message.edit_text(
+        "Отправьте username участника, которого нужно назначить победителем.\n\n"
+        "Пример: <code>@username</code>\n\n"
+        "Важно: пользователь уже должен быть среди участников этого розыгрыша.",
+        reply_markup=back_menu(f"admin:show:{giveaway_id}"),
+    )
+
+
+@dp.message_handler(state=AdminStates.manual_winner)
+async def manual_winner_message(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    giveaway = await get_giveaway(data["giveaway_id"])
+    if not giveaway:
+        await message.answer("Розыгрыш не найден.", reply_markup=main_menu())
+        await state.finish()
+        return
+    if not giveaway.run_status or giveaway.finished_at:
+        await message.answer("Этот розыгрыш уже не активен.")
+        await state.finish()
+        status = await giveaway_status(giveaway)
+        await message.answer(await render_giveaway(giveaway), reply_markup=giveaway_actions(giveaway.callback_value, status))
+        return
+
+    value = (message.text or "").strip().lstrip("@").lower()
+    if not value:
+        await message.answer("Отправьте username участника. Например: <code>@username</code>")
+        return
+
+    participants = await GiveawayParticipant().get_participants(giveaway.callback_value)
+    manual_winner = None
+    for participant in participants:
+        username = (participant.get("username") or "").lower()
+        if username == value:
+            manual_winner = participant
+            break
+
+    if not manual_winner:
+        await message.answer(
+            "Такого username нет среди участников этого розыгрыша. "
+            "Проверьте написание или сначала попросите пользователя нажать кнопку участия."
+        )
+        return
+
+    await finish_giveaway_with_manual_winner(giveaway, manual_winner)
+    await state.finish()
+    await message.answer(f"Победитель назначен вручную: {user_label(manual_winner)}")
+    await message.answer(
+        await render_giveaway(await get_giveaway(giveaway.callback_value)),
+        reply_markup=giveaway_actions(giveaway.callback_value, "finished"),
+    )
 
 
 @dp.callback_query_handler(lambda c: c.data.startswith("admin:stop:"), state="*")

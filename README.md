@@ -9,6 +9,7 @@ Production-oriented Telegram bot for channel giveaways.
 - Supports participation by button or by comments.
 - Supports strict subscription checks and soft subscription links.
 - Selects main and reserve winners.
+- Allows manual winner selection by participant username.
 - Exports participants to CSV.
 - Uses PostgreSQL as the production database.
 - Includes a local browser Control Center for non-technical setup.
@@ -72,6 +73,22 @@ Comment giveaways:
 
 - The bot must be admin in the linked discussion group while comments are collected.
 
+## Manual Winner Selection
+
+For an active giveaway, open the giveaway card and click:
+
+```text
+Выбрать победителя вручную
+```
+
+Then send the participant username, for example:
+
+```text
+@username
+```
+
+The user must already be in the participant list. The manual winner becomes the first main winner. If the giveaway has more main or reserve places, the remaining places are filled randomly from the other participants.
+
 ## Manual Start
 
 If you do not use `START.command` or `START.bat`:
@@ -112,6 +129,7 @@ Prefer numeric `OWNERS`. Username access is convenient, but numeric ID is safer.
 - When `Restart bot` is pressed, the old process is stopped and a new one is started.
 - When the Control Center process is closed, the bot process started by it is stopped too.
 - Logs are stored in `runtime/bot.log` and `runtime/control-panel.log`.
+- Logs are not shown in the simple UI, but remain available in `runtime/` for troubleshooting.
 
 ## Delivery Notes
 
