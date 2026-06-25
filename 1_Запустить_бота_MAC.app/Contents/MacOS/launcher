@@ -1,0 +1,13 @@
+#!/bin/bash
+set -e
+
+APP_CONTENTS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+PROJECT_DIR="$(cd "$APP_CONTENTS_DIR/../.." && pwd)"
+cd "$PROJECT_DIR"
+
+if command -v python3 >/dev/null 2>&1; then
+  exec python3 control_panel.py
+fi
+
+osascript -e 'display dialog "Python 3 не найден. Установите Python 3.10 или новее, затем откройте приложение снова." buttons {"OK"} default button "OK" with icon caution'
+exit 1
