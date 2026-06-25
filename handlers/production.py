@@ -1,5 +1,6 @@
 import asyncio
 import csv
+import hashlib
 import html
 import logging
 import random
@@ -48,6 +49,7 @@ class AdminStates(StatesGroup):
     create_reserve_count = State()
     create_captcha = State()
     add_publish_channel = State()
+    add_condition_type = State()
     add_condition_channel = State()
     add_discussion_group = State()
 
@@ -85,6 +87,14 @@ def yes_no_menu(prefix: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(row_width=2).add(
         InlineKeyboardButton("Да", callback_data=f"{prefix}:yes"),
         InlineKeyboardButton("Нет", callback_data=f"{prefix}:no"),
+    )
+
+
+def condition_type_menu(giveaway_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(row_width=1).add(
+        InlineKeyboardButton("Строгая проверка подписки", callback_data=f"admin:condition:type:strict:{giveaway_id}"),
+        InlineKeyboardButton("Мягкая ссылка без проверки", callback_data=f"admin:condition:type:soft:{giveaway_id}"),
+        InlineKeyboardButton("Назад", callback_data=f"admin:show:{giveaway_id}"),
     )
 
 
@@ -193,6 +203,33 @@ def channel_anchor(channel: dict) -> str:
     return f'<a href="{html.escape(url, quote=True)}">{label}</a>'
 
 
+def stable_soft_channel_id(value: str) -> int:
+    digest = hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
+    return -int(digest, 16)
+
+
+def condition_type_label(condition_type: str | None) -> str:
+    return "мягкая ссылка" if condition_type == "soft" else "строгая проверка"
+
+
+def conditions_markup(conditions: list[dict], participate_url: str | None = None) -> InlineKeyboardMarkup | None:
+    buttons = InlineKeyboardMarkup(row_width=1)
+    has_buttons = False
+    for condition in conditions:
+        url = condition.get("target_channel_url")
+        if not url:
+            continue
+        name = condition.get("target_channel_name") or "канал"
+        buttons.add(InlineKeyboardButton(f"Подписаться: {name}", url=url))
+        has_buttons = True
+
+    if participate_url:
+        buttons.add(InlineKeyboardButton("Участвовать", url=participate_url))
+        has_buttons = True
+
+    return buttons if has_buttons else None
+
+
 async def resolve_channel_from_message(message: types.Message) -> tuple[dict | None, str | None]:
     forwarded_chat = message.forward_from_chat
     if forwarded_chat:
@@ -241,6 +278,48 @@ async def resolve_channel_from_message(message: types.Message) -> tuple[dict | N
     }, None
 
 
+def resolve_soft_channel_from_message(message: types.Message) -> tuple[dict | None, str | None]:
+    forwarded_chat = message.forward_from_chat
+    if forwarded_chat:
+        if forwarded_chat.type != "channel":
+            return None, "Это не канал. Для мягкого условия отправьте @username, ссылку t.me/... или перешлите пост из канала."
+
+        username = getattr(forwarded_chat, "username", None)
+        post_id = getattr(message, "forward_from_message_id", None)
+        url = None
+        if username:
+            url = f"https://t.me/{username}"
+            if post_id:
+                url = f"{url}/{post_id}"
+
+        return {
+            "id": forwarded_chat.id,
+            "title": forwarded_chat.title,
+            "username": username,
+            "post_id": post_id,
+            "url": url,
+        }, None
+
+    parsed = parse_channel_reference(message.text or message.caption)
+    if not parsed:
+        return None, "Не смог определить канал. Пришлите @username, ссылку t.me/channel или ссылку на пост."
+
+    username = parsed.get("username")
+    url = parsed.get("url")
+    if not url and username:
+        url = f"https://t.me/{username}"
+    if not url:
+        return None, "Для мягкого условия нужна ссылка, куда пользователь сможет перейти."
+
+    return {
+        "id": parsed["chat_ref"] if isinstance(parsed["chat_ref"], int) else stable_soft_channel_id(url),
+        "title": username or url,
+        "username": username,
+        "post_id": parsed.get("post_id"),
+        "url": url,
+    }, None
+
+
 async def ensure_bot_channel_admin(channel_id: int, error_text: str) -> tuple[bool, str | None]:
     try:
         member = await bot.get_chat_member(channel_id, bot.id)
@@ -272,7 +351,7 @@ async def render_giveaway(giveaway: GiveAway) -> str:
     mode = "по комментариям" if giveaway.type == "comments" else "по кнопке"
     publish = giveaway.publish_channel_name or "не выбран"
     conditions_text = "\n".join(
-        f"- {item['target_channel_name']} ({item['target_channel_id']})"
+        f"- {item['target_channel_name']} ({condition_type_label(item.get('condition_type'))})"
         for item in conditions
     ) or "не добавлены"
     finished = giveaway.finished_at.strftime("%d.%m.%Y %H:%M") if giveaway.finished_at else "-"
@@ -342,11 +421,15 @@ async def add_participant(giveaway_id: str, user: types.User, captcha_passed: bo
 
 async def check_subscriptions(giveaway_id: str, user_id: int) -> tuple[bool, list[str]]:
     conditions = await GiveawayCondition().get_conditions(giveaway_id)
+    strict_conditions = [
+        condition for condition in conditions
+        if condition.get("condition_type", "strict") == "strict"
+    ]
     missing = []
-    if not conditions:
-        return False, ["условия подписки не настроены"]
+    if not strict_conditions:
+        return True, []
 
-    for condition in conditions:
+    for condition in strict_conditions:
         try:
             member = await bot.get_chat_member(condition["target_channel_id"], user_id)
         except Exception:
@@ -499,7 +582,12 @@ async def register_publish_channel(message: types.Message, state: FSMContext):
 async def register_condition_channel(message: types.Message, state: FSMContext):
     data = await state.get_data()
     giveaway = await get_giveaway(data["giveaway_id"])
-    channel, error = await resolve_channel_from_message(message)
+    condition_type = data.get("condition_type", "strict")
+    if condition_type == "soft":
+        channel, error = resolve_soft_channel_from_message(message)
+    else:
+        channel, error = await resolve_channel_from_message(message)
+
     if not giveaway:
         await message.answer("Розыгрыш не найден.", reply_markup=main_menu())
         await state.finish()
@@ -509,13 +597,14 @@ async def register_condition_channel(message: types.Message, state: FSMContext):
         await message.answer(error, reply_markup=back_menu(f"admin:show:{giveaway.callback_value}"))
         return
 
-    ok, admin_error = await ensure_bot_channel_admin(
-        channel["id"],
-        "Бот должен быть администратором канала, чтобы проверять подписку участников.",
-    )
-    if not ok:
-        await message.answer(admin_error)
-        return
+    if condition_type == "strict":
+        ok, admin_error = await ensure_bot_channel_admin(
+            channel["id"],
+            "Бот должен быть администратором канала, чтобы проверять подписку участников.",
+        )
+        if not ok:
+            await message.answer(admin_error)
+            return
 
     saved_name = channel_display_name(channel)
     if not await TelegramChannel().exists_channel(channel["id"], giveaway.callback_value, "condition"):
@@ -526,10 +615,19 @@ async def register_condition_channel(message: types.Message, state: FSMContext):
             name=saved_name,
             role="condition",
         )
-    added = await GiveawayCondition().add_condition(giveaway.callback_value, channel["id"], saved_name)
+    added = await GiveawayCondition().add_condition(
+        giveaway.callback_value,
+        channel["id"],
+        saved_name,
+        target_channel_url=channel.get("url"),
+        condition_type=condition_type,
+    )
     await state.finish()
     if added:
-        await message.answer(f"Условие подписки добавлено: {channel_anchor(channel)}.", disable_web_page_preview=True)
+        await message.answer(
+            f"Условие добавлено ({condition_type_label(condition_type)}): {channel_anchor(channel)}.",
+            disable_web_page_preview=True,
+        )
     else:
         await message.answer(f"Это условие уже было добавлено: {channel_anchor(channel)}.", disable_web_page_preview=True)
     await message.answer(await render_giveaway(await get_giveaway(giveaway.callback_value)), reply_markup=giveaway_actions(giveaway.callback_value, "draft"))
@@ -581,11 +679,13 @@ async def publish_giveaway(giveaway: GiveAway) -> tuple[bool, str]:
     reply_markup = None
     if giveaway.type == "button":
         me = await bot.get_me()
-        reply_markup = InlineKeyboardMarkup().add(
-            InlineKeyboardButton("Участвовать", url=f"https://t.me/{me.username}?start={giveaway.callback_value}")
+        reply_markup = conditions_markup(
+            conditions,
+            participate_url=f"https://t.me/{me.username}?start={giveaway.callback_value}",
         )
     else:
         text += f"\n\nДля участия напишите в комментариях: <code>{text_for_participation_in_comments_giveaways}</code>"
+        reply_markup = conditions_markup(conditions)
 
     if giveaway.photo_id:
         sent = await bot.send_photo(giveaway.publish_channel_id, giveaway.photo_id, caption=text, reply_markup=reply_markup)
@@ -620,7 +720,11 @@ async def start(message: types.Message, state: FSMContext):
 
         ok, missing = await check_subscriptions(giveaway_id, message.from_user.id)
         if not ok:
-            await message.answer("Для участия подпишитесь на каналы условий:\n" + "\n".join(missing))
+            conditions = await GiveawayCondition().get_conditions(giveaway_id)
+            await message.answer(
+                "Для участия подпишитесь на каналы условий:\n" + "\n".join(missing),
+                reply_markup=conditions_markup(conditions),
+            )
             return
 
         if giveaway.captcha:
@@ -817,11 +921,34 @@ async def publish_channel_message(message: types.Message, state: FSMContext):
 async def ask_condition_channel(callback: types.CallbackQuery, state: FSMContext):
     giveaway_id = callback.data.rsplit(":", 1)[1]
     await state.update_data(giveaway_id=giveaway_id)
-    await AdminStates.add_condition_channel.set()
+    await AdminStates.add_condition_type.set()
     await callback.message.edit_text(
-        "Отправьте @username канала, ссылку t.me/channel, ссылку на пост t.me/channel/123 или перешлите пост из канала, подписку на который нужно проверять.",
-        reply_markup=back_menu(f"admin:show:{giveaway_id}"),
+        "Выберите тип условия подписки:\n\n"
+        "<b>Строгая проверка</b> - бот проверяет подписку, но должен быть админом канала.\n"
+        "<b>Мягкая ссылка</b> - бот показывает кнопку подписки, но не проверяет факт подписки.",
+        reply_markup=condition_type_menu(giveaway_id),
     )
+
+
+@dp.callback_query_handler(lambda c: c.data.startswith("admin:condition:type:"), state=AdminStates.add_condition_type)
+async def condition_type_selected(callback: types.CallbackQuery, state: FSMContext):
+    _, _, _, condition_type, giveaway_id = callback.data.split(":", 4)
+    await state.update_data(giveaway_id=giveaway_id, condition_type=condition_type)
+    await AdminStates.add_condition_channel.set()
+
+    if condition_type == "soft":
+        text = (
+            "Отправьте @username канала, ссылку t.me/channel или ссылку на конкретный пост.\n\n"
+            "Это будет мягкое условие: бот покажет кнопку, но не будет проверять подписку и не потребует админку."
+        )
+    else:
+        text = (
+            "Отправьте @username канала, ссылку t.me/channel, ссылку на пост t.me/channel/123 "
+            "или перешлите пост из канала.\n\n"
+            "Это будет строгая проверка: бот должен быть администратором этого канала."
+        )
+
+    await callback.message.edit_text(text, reply_markup=back_menu(f"admin:show:{giveaway_id}"))
 
 
 @dp.message_handler(state=AdminStates.add_condition_channel, content_types=types.ContentTypes.ANY)
@@ -858,7 +985,10 @@ async def show_channels(callback: types.CallbackQuery):
         group = f", группа: {channel['group_id']}" if channel.get("group_id") else ""
         text += f"- {role}: {channel['name']} ({channel['channel_id']}){group}\n"
     text += "\n<b>Условия подписки:</b>\n"
-    text += "\n".join(f"- {item['target_channel_name']}" for item in conditions) or "не добавлены"
+    text += "\n".join(
+        f"- {item['target_channel_name']} ({condition_type_label(item.get('condition_type'))})"
+        for item in conditions
+    ) or "не добавлены"
 
     markup = InlineKeyboardMarkup(row_width=1).add(
         InlineKeyboardButton("Добавить группу обсуждения", callback_data=f"admin:discussion:{giveaway_id}"),
@@ -1000,7 +1130,11 @@ async def comment_participation(message: types.Message):
             return
         ok, missing = await check_subscriptions(giveaway.callback_value, message.from_user.id)
         if not ok:
-            await message.reply("Для участия подпишитесь на каналы условий:\n" + "\n".join(missing))
+            conditions = await GiveawayCondition().get_conditions(giveaway.callback_value)
+            await message.reply(
+                "Для участия подпишитесь на каналы условий:\n" + "\n".join(missing),
+                reply_markup=conditions_markup(conditions),
+            )
             return
         added = await add_participant(giveaway.callback_value, message.from_user)
         await message.reply("Спасибо за участие!" if added else "Вы уже участвуете.")

@@ -4,6 +4,7 @@
 .venv/
 fsm_state.json
 exports/
+data/
 __pycache__/
 *.py[cod]
 .pytest_cache/

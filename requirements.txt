@@ -1,5 +1,6 @@
 aiogram==2.25.2
 aiohttp<3.9
+aiosqlite
 asyncpg
 pytz
 tortoise-orm
