@@ -229,6 +229,21 @@ def prepare_database() -> str:
     return "Локальная база данных подготовлена. Она хранится в папке runtime внутри проекта."
 
 
+def database_file_path(config: dict[str, str]) -> Path | None:
+    database_url = config.get("DATABASE_URL", "")
+    if not database_url.startswith("sqlite://"):
+        return None
+
+    raw_path = database_url.removeprefix("sqlite://")
+    if not raw_path or raw_path == ":memory:":
+        return None
+
+    path = Path(raw_path).expanduser()
+    if not path.is_absolute():
+        path = BASE_DIR / path
+    return path
+
+
 def validate_config(config: dict[str, str]) -> list[str]:
     errors = []
     if not config.get("BOT_TOKEN"):
@@ -248,9 +263,17 @@ def bot_is_running() -> bool:
 def start_bot() -> str:
     terminate_pid_file(BOT_PID_PATH)
     config = read_env()
+    if not config.get("DATABASE_URL"):
+        config["DATABASE_URL"] = local_sqlite_url()
+        write_env(config)
+
     errors = validate_config(config)
     if errors:
         return " ".join(errors)
+
+    db_path = database_file_path(config)
+    if db_path:
+        db_path.parent.mkdir(parents=True, exist_ok=True)
 
     ensure_runtime_dir()
     BOT_LOG_PATH.write_text("", encoding="utf-8")
@@ -291,11 +314,20 @@ def render_page(message: str = "") -> str:
     running = bot_is_running()
     status = "запущен" if running else "остановлен"
     status_class = "ok" if running else "muted"
+    db_path = database_file_path(config)
+    db_ready = bool(db_path and db_path.exists())
+    settings_saved_at = "-"
+    if ENV_PATH.exists():
+        settings_saved_at = time.strftime("%d.%m.%Y %H:%M", time.localtime(ENV_PATH.stat().st_mtime))
 
     def value(key: str) -> str:
         return html.escape(config.get(key, ""), quote=True)
 
-    token_hint = "Токен сохранен. Оставьте поле пустым, чтобы не менять его." if config.get("BOT_TOKEN") else ""
+    token_saved = bool(config.get("BOT_TOKEN"))
+    token_hint = "Токен уже сохранён. Оставьте поле пустым, чтобы не менять его." if token_saved else "Вставьте токен один раз. После сохранения панель его запомнит."
+    token_placeholder = "Токен уже сохранён" if token_saved else "Вставьте токен из BotFather"
+    owner_summary = config.get("OWNER_USERNAMES") or config.get("OWNERS") or "не указан"
+    database_summary = "готова" if db_ready else "ещё не подготовлена"
     message_html = f'<div class="message">{html.escape(message)}</div>' if message else ""
 
     return f"""<!doctype html>
@@ -364,6 +396,27 @@ def render_page(message: str = "") -> str:
       background: #eef7ff;
       white-space: pre-wrap;
     }}
+    .memory {{
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 16px;
+    }}
+    .memory-item {{
+      border: 1px solid #d8e0e8;
+      border-radius: 8px;
+      padding: 12px;
+      background: #fff;
+    }}
+    .memory-label {{
+      color: #657383;
+      font-size: 13px;
+      margin-bottom: 4px;
+    }}
+    .memory-value {{
+      font-weight: 800;
+      overflow-wrap: anywhere;
+    }}
     details {{
       margin-top: 14px;
       border: 1px solid #d8e0e8;
@@ -378,6 +431,7 @@ def render_page(message: str = "") -> str:
     @media (max-width: 760px) {{
       body {{ padding: 14px; }}
       .row {{ grid-template-columns: 1fr; }}
+      .memory {{ grid-template-columns: 1fr; }}
       button {{ width: 100%; }}
       .actions {{ flex-direction: column; }}
     }}
@@ -386,15 +440,33 @@ def render_page(message: str = "") -> str:
 <body>
 <main>
   <h1>Панель запуска бота</h1>
-  <p>Заполните основные поля, подготовьте базу данных и запустите бота. В код заходить не нужно.</p>
+  <p>Заполните основные поля один раз. Панель запомнит настройки, и при следующем открытии можно будет сразу запускать бота.</p>
   <div class="status {status_class}">Бот: {status}</div>
+  <div class="memory">
+    <div class="memory-item">
+      <div class="memory-label">Токен бота</div>
+      <div class="memory-value">{'сохранён' if token_saved else 'не указан'}</div>
+    </div>
+    <div class="memory-item">
+      <div class="memory-label">Владелец</div>
+      <div class="memory-value">{html.escape(owner_summary)}</div>
+    </div>
+    <div class="memory-item">
+      <div class="memory-label">База данных</div>
+      <div class="memory-value">{database_summary}</div>
+    </div>
+    <div class="memory-item">
+      <div class="memory-label">Настройки сохранены</div>
+      <div class="memory-value">{html.escape(settings_saved_at)}</div>
+    </div>
+  </div>
   {message_html}
 
   <section>
     <h2>1. Основные настройки</h2>
     <form method="post" action="/save">
       <label>Токен бота</label>
-      <input name="BOT_TOKEN" type="password" autocomplete="off" placeholder="Вставьте токен из BotFather">
+      <input name="BOT_TOKEN" type="password" autocomplete="off" placeholder="{html.escape(token_placeholder)}">
       <div class="hint">Токен выдает BotFather при создании Telegram-бота. {html.escape(token_hint)}</div>
 
       <label>Кто будет управлять ботом</label>
@@ -454,7 +526,7 @@ def render_page(message: str = "") -> str:
   <section>
     <h2>3. Управление ботом</h2>
     <form class="actions" method="post">
-      <button formaction="/start-bot">Запустить бота</button>
+      <button formaction="/start-bot">Запустить с сохранёнными настройками</button>
       <button class="stop" formaction="/stop-bot">Остановить бота</button>
       <button class="secondary" formaction="/restart-bot">Перезапустить бота</button>
     </form>

@@ -25,10 +25,12 @@ Telegram bot for channel giveaways with a simple browser setup panel.
 5. Click `Сохранить настройки`.
 6. Click `Установить нужные файлы`.
 7. Click `Подготовить базу данных`.
-8. Click `Запустить бота`.
+8. Click `Запустить с сохранёнными настройками`.
 9. Open Telegram and send `/start` to the bot.
 
 No separate database program is required.
+
+The panel remembers saved settings in the local `.env` file. On the next launch, the client does not need to paste the token again; they can open the panel and click `Запустить с сохранёнными настройками`.
 
 ## Database
 
