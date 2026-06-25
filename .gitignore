@@ -5,6 +5,10 @@
 fsm_state.json
 exports/
 data/
+dist/
+runtime/*
+!runtime/
+!runtime/README.md
 __pycache__/
 *.py[cod]
 .pytest_cache/

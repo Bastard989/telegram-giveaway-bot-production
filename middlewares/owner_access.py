@@ -7,7 +7,7 @@ from config import is_owner
 
 class OwnerAccessMiddleware(BaseMiddleware):
     async def on_pre_process_callback_query(self, callback_query, data):
-        if callback_query.data and callback_query.data.startswith("admin_"):
+        if callback_query.data and callback_query.data.startswith(("admin:", "admin_")):
             if not is_owner(callback_query.from_user.id, callback_query.from_user.username):
                 await callback_query.answer("Доступ запрещен", show_alert=True)
                 raise CancelHandler()
@@ -23,7 +23,11 @@ class OwnerAccessMiddleware(BaseMiddleware):
         )
         current_state = await state.get_state()
 
-        if current_state and "Give" in current_state and not is_owner(message.from_user.id, message.from_user.username):
+        is_admin_state = current_state and (
+            "Give" in current_state or current_state.startswith("AdminStates:")
+        )
+
+        if is_admin_state and not is_owner(message.from_user.id, message.from_user.username):
             await message.answer("Доступ запрещен")
             await state.finish()
             raise CancelHandler()

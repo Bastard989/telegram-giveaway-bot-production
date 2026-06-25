@@ -2,139 +2,145 @@
 
 Production-oriented Telegram bot for channel giveaways.
 
-## Features
+## What It Does
 
-- Admin-only control panel.
-- Giveaway modes:
-  - join by button;
-  - join by comment under the giveaway post.
-- One publish channel per giveaway.
-- Separate subscription conditions per giveaway.
-- Optional captcha for button giveaways.
-- Main and reserve winners.
-- Participant deduplication by Telegram `user_id`.
-- Manual finish and scheduled finish.
-- Participant export to CSV.
-- SQLite for simple local launch or PostgreSQL for server production launch.
-- Persistent FSM state in `fsm_state.json`.
-- Local browser control panel for non-technical setup and start/stop.
+- Creates giveaways from Telegram admin panel.
+- Publishes giveaway posts to a selected Telegram channel.
+- Supports participation by button or by comments.
+- Supports strict subscription checks and soft subscription links.
+- Selects main and reserve winners.
+- Exports participants to CSV.
+- Uses PostgreSQL as the production database.
+- Includes a local browser Control Center for non-technical setup.
 
-## Requirements
+## Fast Start For Client
 
-- Python 3.10 or 3.11.
-- Telegram bot token from BotFather.
+1. Unzip the project.
+2. Open `START.command` on macOS or `START.bat` on Windows.
+3. The browser Control Center opens automatically.
+4. Fill:
+   - BotFather token.
+   - Telegram owner ID or owner username.
+5. Click `Save settings`.
+6. Click `Install dependencies`.
+7. Click `Prepare PostgreSQL`.
+8. Click `Start bot`.
+9. Open Telegram and send `/start` to the bot.
 
-## Install
+The Control Center chooses a free browser port automatically. Do not manually open `127.0.0.1:8088` unless the Control Center is running and printed that exact port.
 
-```bash
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-cp .env.example .env
+## Database
+
+The default database is PostgreSQL through Docker Compose.
+
+The database files are stored inside the project:
+
+```text
+runtime/postgres-data/
 ```
 
-Fill `.env`:
+The Control Center writes the correct `DATABASE_URL` to `.env` automatically after `Prepare PostgreSQL`.
+
+Default local database URL:
+
+```env
+DATABASE_URL=postgres://giveaway_bot:giveaway_bot@127.0.0.1:55432/giveaway_bot
+```
+
+If port `55432` is busy, the Control Center selects another free port and updates `.env`.
+
+Docker Desktop is required for the one-click PostgreSQL setup. If Docker is not installed, install Docker Desktop or use an external PostgreSQL database and paste its `DATABASE_URL` manually.
+
+## Telegram Admin Rights
+
+Publish channel:
+
+- The bot must be admin because it publishes giveaway posts there.
+
+Strict subscription condition:
+
+- The bot must be admin in the condition channel.
+- The bot checks whether the participant is subscribed.
+
+Soft subscription condition:
+
+- The bot does not need admin rights.
+- The bot only shows a subscribe button/link.
+- The participant can technically join without subscribing.
+
+Comment giveaways:
+
+- The bot must be admin in the linked discussion group while comments are collected.
+
+## Manual Start
+
+If you do not use `START.command` or `START.bat`:
+
+```bash
+python3 control_panel.py
+```
+
+The Control Center prints the selected local URL and opens it in the browser.
+
+## Environment
+
+`.env` is generated locally and must not be committed or sent publicly.
+
+Main fields:
 
 ```env
 BOT_TOKEN=put_botfather_token_here
-DATABASE_URL=sqlite://data/giveaway_bot.sqlite3
+DATABASE_URL=postgres://giveaway_bot:giveaway_bot@127.0.0.1:55432/giveaway_bot
 OWNERS=123456789
 OWNER_USERNAMES=
 TIMEZONE=Europe/Moscow
 START_TEXT=Главное меню:
 COMMENT_GIVEAWAY_KEYWORD=Участвую
+POSTGRES_HOST=127.0.0.1
+POSTGRES_PORT=55432
+POSTGRES_DB=giveaway_bot
+POSTGRES_USER=giveaway_bot
+POSTGRES_PASSWORD=giveaway_bot
 ```
 
-Use numeric `OWNERS` in production. `OWNER_USERNAMES` is convenient for local testing, but numeric IDs are safer.
+Prefer numeric `OWNERS`. Username access is convenient, but numeric ID is safer.
 
-`DATABASE_URL` can be SQLite for simple setups or PostgreSQL for server setups. The bot creates missing tables automatically on the first run.
+## Process Rules
 
-## Browser Control Panel
-
-For non-technical setup, run:
-
-```bash
-.venv/bin/python control_panel.py
-```
-
-Open:
-
-```text
-http://127.0.0.1:8088
-```
-
-The panel lets you fill:
-
-- BotFather token.
-- Telegram owner ID or owner username.
-- Database URL.
-- Timezone.
-- Comment keyword.
-
-Then click "Save settings" and "Start bot".
-
-The panel writes only the local `.env` file. `.env` is ignored by git and must not be committed.
-
-## Run
-
-```bash
-.venv/bin/python app.py
-```
-
-## Telegram Setup
-
-For button giveaways:
-
-1. Add the bot as admin to the publish channel.
-2. Add the bot as admin to all channels used as subscription conditions.
-
-For comment giveaways:
-
-1. Add the bot as admin to the publish channel.
-2. Add the bot as admin to the linked discussion group.
-3. Add the bot as admin to all condition channels.
-4. In the bot admin panel, connect both publish channel and discussion group.
-
-Channels can be connected by sending one of these formats in the admin panel:
-
-- `@channel_username`
-- `https://t.me/channel_username`
-- `https://t.me/channel_username/123`
-- `https://t.me/c/123456/123` for private channel post links available to the bot
-- a forwarded post from the channel
-
-Telegram Bot API limitations still apply:
-
-- The bot must stay admin in the publish channel while it needs to publish giveaway posts there.
-- For strict subscription conditions, the bot must stay admin in every condition channel while active giveaways need subscription checks for that channel.
-- For soft subscription conditions, the bot only shows a button/link and does not need admin rights in that condition channel.
-- For comment giveaways, the bot must also stay admin in the linked discussion group while comments are being collected.
-
-## Admin Flow
-
-1. Send `/start` to the bot.
-2. Create a giveaway.
-3. Select mode: button or comments.
-4. Fill name, text, media, end date, winners and reserve winners.
-5. Open the draft.
-6. Set publish channel.
-7. Add subscription conditions:
-   - strict check: real subscription verification, bot must be admin in that channel;
-   - soft link: only shows a subscribe button, no real verification and no admin rights required.
-8. For comments mode, connect the discussion group.
-9. Start the giveaway.
+- Only one bot process should run.
+- When `Start bot` is pressed, an old bot process is stopped first.
+- When `Restart bot` is pressed, the old process is stopped and a new one is started.
+- When the Control Center process is closed, the bot process started by it is stopped too.
+- Logs are stored in `runtime/bot.log` and `runtime/control-panel.log`.
 
 ## Delivery Notes
 
-Do not deliver `.env`, `.venv`, `fsm_state.json`, `exports/`, `__pycache__/`, or `.DS_Store`.
+To build a clean zip for the client:
 
-Before handing the bot to a client, rotate the Telegram token in BotFather and put the fresh token into the client's `.env`.
+```bash
+python3 scripts/build_release_zip.py
+```
 
-Recommended production handoff:
+or double-click:
 
-1. Create a fresh bot token in BotFather or rotate the current token.
-2. Create the PostgreSQL database on the target server.
-3. Copy `.env.example` to `.env` on the target server and fill real values there.
-4. Add the bot as admin to all publish, condition, and discussion channels.
-5. Start the bot with a process manager such as systemd, supervisor, Docker, or a hosting platform worker.
+```text
+BUILD_ZIP.command
+```
 
-If the client uses the browser control panel on a personal computer, the bot works only while that computer, internet connection, and panel/bot process are running. For 24/7 operation, deploy it to a VPS or hosting platform.
+The zip is created at:
+
+```text
+dist/telegram-giveaway-bot.zip
+```
+
+Do not send:
+
+- `.env`
+- `.venv/`
+- `.git/`
+- `__pycache__/`
+- `runtime/postgres-data/` unless you intentionally want to transfer local database contents
+- `runtime/*.pid`
+- `runtime/*.log`
+
+Before delivery, rotate any token that was ever shared in chat.

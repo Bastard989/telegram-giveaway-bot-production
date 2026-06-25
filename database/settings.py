@@ -43,8 +43,6 @@ async def initialize_database():
                 [
                     'database.models.giveaway',
                     'database.models.telegram_channel',
-                    'database.models.giveaway_statistic',
-                    'database.models.temporary_users',
                     'database.models.giveaway_condition',
                     'database.models.giveaway_participant',
                     'database.models.giveaway_winner',
