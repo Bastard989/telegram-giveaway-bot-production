@@ -1,167 +1,203 @@
 # Telegram Giveaway Bot
 
-Telegram bot for channel giveaways with a simple browser setup panel.
+Готовый Telegram-бот для розыгрышей в каналах с локальной браузерной панелью запуска, SQLite-базой внутри папки проекта и чистой упаковкой в zip для передачи клиенту.
 
-## What It Does
+Проект рассчитан на сценарий “скачал, распаковал, открыл панель, вставил токен BotFather, нажал кнопки запуска”. Отдельный сервер базы данных не нужен.
 
-- Creates giveaways from Telegram admin panel.
-- Publishes giveaway posts to a selected Telegram channel.
-- Supports participation by button or by comments.
-- Supports strict subscription checks and soft subscription links.
-- Selects winners by prize places.
-- Allows manual winner selection by participant username.
-- Exports participants to CSV.
-- Stores data in a local database file inside the project.
-- Includes a local browser panel for non-technical setup.
+## Возможности
 
-## Fast Start For Client
+- Создание розыгрышей через Telegram-меню администратора.
+- Публикация постов розыгрыша в Telegram-канал.
+- Участие по кнопке под постом или по комментариям.
+- Строгая проверка подписки на каналы, где бот является администратором.
+- Мягкие условия подписки через ссылку без технической проверки.
+- Настройка количества призовых мест и победителей на каждое место.
+- Ручной выбор победителя по username из списка участников.
+- Экспорт участников в CSV.
+- Локальная SQLite-база в `runtime/giveaway-bot.sqlite3`.
+- Браузерная панель для установки зависимостей, подготовки базы, проверки окружения, запуска, остановки и backup базы.
+- Очистка токена перед передачей проекта другому человеку.
+- Сборка чистого zip без `.env`, `.venv`, логов, pid-файлов, кешей и локальной базы.
 
-For a detailed non-technical manual, open:
+## Для кого
+
+Проект подходит владельцам Telegram-каналов, администраторам розыгрышей и подрядчикам, которым нужно быстро передать клиенту автономного бота без сложной серверной настройки.
+
+Для постоянной работы бот лучше запускать на VPS или другом сервере, который не выключается. На домашнем компьютере бот работает только пока включён компьютер, есть интернет и процесс не остановлен.
+
+## Быстрый старт
+
+Скачайте release zip, распакуйте его и откройте папку проекта.
+
+### macOS
+
+Команда должна выполняться именно в папке, где лежит `START.command`:
+
+```bash
+xattr -dr com.apple.quarantine . 2>/dev/null; chmod +x START.command; ./START.command
+```
+
+Если Terminal открыт не в той папке, сначала перейдите в папку проекта:
+
+```bash
+cd /path/to/unzipped/project
+```
+
+Затем повторите команду запуска.
+
+### Windows
+
+Откройте:
+
+```text
+START.bat
+```
+
+Если Windows покажет предупреждение безопасности, нажмите `Подробнее`, затем `Выполнить в любом случае`.
+
+## Первый запуск в панели
+
+После запуска откроется локальная браузерная панель.
+
+1. Вставьте токен бота из BotFather.
+2. Укажите Telegram ID владельца или username владельца.
+3. Нажмите `Сохранить настройки`.
+4. Нажмите `Установить нужные файлы`.
+5. Нажмите `Подготовить базу данных`.
+6. Нажмите `Проверить окружение`.
+7. Нажмите `Запустить с сохранёнными настройками`.
+8. Откройте Telegram и отправьте боту `/start`.
+
+Подробная инструкция для нетехнического пользователя лежит в файле:
 
 ```text
 РУКОВОДСТВО_ПО_ИСПОЛЬЗОВАНИЮ.md
 ```
 
-1. Unzip the project.
-2. On macOS, run the startup command from the unzipped folder that contains `START.command`:
-
-```bash
-xattr -dr com.apple.quarantine . 2>/dev/null || true; chmod +x ./START.command; ./START.command
-```
-
-On Windows, open `START.bat`.
-3. The browser setup panel opens automatically.
-4. Fill:
-   - BotFather token.
-   - Telegram owner ID or owner username.
-5. Click `Сохранить настройки`.
-6. Click `Установить нужные файлы`.
-7. Click `Подготовить базу данных`.
-8. Click `Проверить окружение`.
-9. Click `Запустить с сохранёнными настройками`.
-10. Open Telegram and send `/start` to the bot.
-
-No separate database program is required.
-
-The panel remembers saved settings in the local `.env` file. On the next launch, the client does not need to paste the token again; they can open the panel and click `Запустить с сохранёнными настройками`.
-
-## Database
-
-The default database is SQLite.
-
-It is a normal file inside the project:
+Короткая инструкция для установки лежит в:
 
 ```text
-runtime/giveaway-bot.sqlite3
+INSTALL.md
 ```
 
-The setup panel creates it automatically when you click:
+## Что проверяет панель
+
+Кнопка `Проверить окружение` проверяет:
+
+- найден ли Python;
+- установлены ли зависимости из `requirements.txt`;
+- валиден ли Telegram-токен через Telegram API;
+- доступна ли локальная SQLite-база.
+
+Кнопка `Backup базы` создаёт копию базы в:
 
 ```text
-Подготовить базу данных
+runtime/backups
 ```
 
-Default database URL:
+Кнопка `Очистить токен перед передачей` удаляет токен из локального `.env`, чтобы проект можно было безопаснее передать другому человеку.
+
+## Настройки
+
+Панель сохраняет настройки в локальный файл `.env`. Этот файл не должен попадать в GitHub или release zip.
+
+Пример безопасного шаблона:
 
 ```env
+BOT_TOKEN=put_botfather_token_here
 DATABASE_URL=sqlite://runtime/giveaway-bot.sqlite3
+OWNERS=123456789
+OWNER_USERNAMES=
+TIMEZONE=Europe/Moscow
+START_TEXT=Главное меню:
+COMMENT_GIVEAWAY_KEYWORD=Участвую
 ```
 
-## Telegram Admin Rights
+## Права бота в Telegram
 
-Publish channel:
+Канал публикации:
 
-- The bot must be admin because it publishes giveaway posts there.
+- бот должен быть администратором;
+- нужно право публиковать сообщения.
 
-Strict subscription condition:
+Строгая проверка подписки:
 
-- The bot must be admin in the condition channel.
-- The bot checks whether the participant is subscribed.
+- бот должен быть администратором в канале-условии;
+- иначе Telegram не даст проверить подписку пользователя.
 
-Soft subscription condition:
+Мягкое условие подписки:
 
-- The bot does not need admin rights.
-- The bot only shows a subscribe button/link.
-- The participant can technically join without subscribing.
+- бот показывает ссылку;
+- админ-права в канале-условии не обязательны;
+- подписка технически не проверяется.
 
-Comment giveaways:
+Розыгрыш по комментариям:
 
-- The bot must be admin in the linked discussion group while comments are collected.
+- у канала должна быть подключена группа обсуждения;
+- бот должен быть администратором в канале и в группе обсуждения.
 
-## Prize Places Logic
+## Сборка release zip
 
-The bot asks two separate questions:
-
-1. Prize places count.
-2. Winners per each place.
-
-Examples:
-
-- `1` prize place and `1` winner per place = 1 total winner.
-- `5` prize places and `1` winner per place = places 1, 2, 3, 4, 5 with one winner each.
-- `5` prize places and `2` winners per place = 10 total winners: two people for each place.
-
-## Manual Winner Selection
-
-For an active giveaway, open the giveaway card and click:
-
-```text
-Выбрать победителя вручную
-```
-
-Then send the participant username, for example:
-
-```text
-@username
-```
-
-The user must already be in the participant list. The manual winner becomes one of the winners for place 1. If the giveaway has more winner slots, the remaining slots are filled randomly from the other participants.
-
-## Delivery Notes
-
-To build a clean zip for the client:
+Для сборки чистого архива:
 
 ```bash
 python3 scripts/build_release_zip.py
 ```
 
-or double-click:
+Или откройте:
 
 ```text
 BUILD_ZIP.command
 ```
 
-The zip is created at:
+Архив создаётся здесь:
 
 ```text
 dist/Бот_для_розыгрышей_Telegram.zip
 ```
 
-Do not send:
+В release zip не попадают:
 
-- `.env`
-- `.venv/`
-- `.git/`
-- `__pycache__/`
-- `runtime/giveaway-bot.sqlite3` unless you intentionally want to transfer local data
-- `runtime/*.pid`
-- `runtime/*.log`
+- `.env`;
+- `.venv/`;
+- `.git/`;
+- `runtime/` с локальной базой, логами и pid-файлами;
+- `dist/`;
+- `tests/`;
+- `scripts/`;
+- кеши Python;
+- `.DS_Store`.
 
-Before delivery, rotate any token that was ever shared in chat.
+## Тесты
 
-Before sending a working folder to a client, click:
-
-```text
-Очистить токен перед передачей
-```
-
-The release zip built by `scripts/build_release_zip.py` does not include `.env`,
-`.venv`, local runtime data, logs, or SQLite database files.
-
-## Tests
-
-Run unit tests from the project virtual environment:
+Запуск unit-тестов:
 
 ```bash
 .venv/bin/python -m unittest discover -s tests
 ```
+
+Проверка компиляции Python-файлов:
+
+```bash
+.venv/bin/python -m py_compile app.py control_panel.py config/*.py database/*.py database/models/*.py handlers/*.py middlewares/*.py scripts/*.py tests/*.py
+```
+
+## Безопасность
+
+- Никогда не публикуйте `.env`.
+- Не отправляйте токен BotFather в чатах, скриншотах и публичных issue.
+- Перед передачей рабочей папки нажмите `Очистить токен перед передачей`.
+- Если токен когда-либо попал в чужие руки, перевыпустите его в BotFather.
+- Перед публикацией release zip проверьте, что в архиве нет `.env`, базы, логов и runtime-файлов.
+
+Дополнительные правила описаны в `SECURITY.md`.
+
+## Технический стек
+
+- Python 3.
+- aiogram 2.x.
+- Tortoise ORM.
+- SQLite по умолчанию.
+- Локальная браузерная панель на стандартной библиотеке Python.
+
+aiogram 2.x является старым, но стабильным стеком. Для этого локального поставочного бота он подходит. Полную миграцию на aiogram 3.x лучше делать отдельным крупным релизом, потому что там меняются роутеры, middleware, состояния и структура обработчиков.

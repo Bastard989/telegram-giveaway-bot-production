@@ -25,7 +25,6 @@ EXCLUDED_FILES = {
     "ARCHITECTURE.md",
     "BUILD_ZIP.command",
     "fsm_state.json",
-    "README.md",
 }
 
 EXCLUDED_SUFFIXES = {
