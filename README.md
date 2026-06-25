@@ -8,7 +8,7 @@ Production-oriented Telegram bot for channel giveaways.
 - Publishes giveaway posts to a selected Telegram channel.
 - Supports participation by button or by comments.
 - Supports strict subscription checks and soft subscription links.
-- Selects main and reserve winners.
+- Selects winners by prize places.
 - Allows manual winner selection by participant username.
 - Exports participants to CSV.
 - Uses PostgreSQL as the production database.
@@ -87,7 +87,20 @@ Then send the participant username, for example:
 @username
 ```
 
-The user must already be in the participant list. The manual winner becomes the first main winner. If the giveaway has more main or reserve places, the remaining places are filled randomly from the other participants.
+The user must already be in the participant list. The manual winner becomes one of the winners for place 1. If the giveaway has more winner slots, the remaining slots are filled randomly from the other participants.
+
+## Prize Places Logic
+
+The bot asks two separate questions:
+
+1. Prize places count.
+2. Winners per each place.
+
+Examples:
+
+- `1` prize place and `1` winner per place = 1 total winner.
+- `5` prize places and `1` winner per place = places 1, 2, 3, 4, 5 with one winner each.
+- `5` prize places and `2` winners per place = 10 total winners: two people for each place.
 
 ## Manual Start
 

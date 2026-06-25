@@ -232,6 +232,25 @@ def conditions_markup(conditions: list[dict], participate_url: str | None = None
     return buttons if has_buttons else None
 
 
+def prize_place_count(giveaway: GiveAway) -> int:
+    return max(int(giveaway.winners_count or 1), 1)
+
+
+def winners_per_prize_place(giveaway: GiveAway) -> int:
+    return max(int(giveaway.reserve_winners_count or 1), 1)
+
+
+def total_winner_slots(giveaway: GiveAway) -> int:
+    return prize_place_count(giveaway) * winners_per_prize_place(giveaway)
+
+
+def winner_slots(giveaway: GiveAway) -> list[int]:
+    slots = []
+    for place in range(1, prize_place_count(giveaway) + 1):
+        slots.extend([place] * winners_per_prize_place(giveaway))
+    return slots
+
+
 async def resolve_channel_from_message(message: types.Message) -> tuple[dict | None, str | None]:
     forwarded_chat = message.forward_from_chat
     if forwarded_chat:
@@ -364,8 +383,9 @@ async def render_giveaway(giveaway: GiveAway) -> str:
         f"<b>Тип:</b> {mode}\n"
         f"<b>Канал публикации:</b> {publish}\n"
         f"<b>Окончание:</b> {giveaway.over_date.strftime('%d.%m.%Y %H:%M')}\n"
-        f"<b>Победителей:</b> {giveaway.winners_count}\n"
-        f"<b>Запасных:</b> {giveaway.reserve_winners_count}\n"
+        f"<b>Призовых мест:</b> {prize_place_count(giveaway)}\n"
+        f"<b>Победителей на место:</b> {winners_per_prize_place(giveaway)}\n"
+        f"<b>Всего победителей:</b> {total_winner_slots(giveaway)}\n"
         f"<b>Капча:</b> {'да' if giveaway.captcha else 'нет'}\n"
         f"<b>Участников:</b> {participants_count}\n"
         f"<b>Завершен:</b> {finished}\n\n"
@@ -453,17 +473,18 @@ async def finish_giveaway(giveaway: GiveAway, reason: str = "schedule") -> list[
 
     await GiveawayWinner().delete_winners(giveaway.callback_value)
 
-    if len(participants) < giveaway.winners_count:
+    if not participants:
         giveaway.run_status = False
         giveaway.finished_at = datetime.now(timezone_info)
         await giveaway.save()
         await notify_finish(giveaway, [], len(participants), too_few=True)
         return []
 
-    selected = participants[: giveaway.winners_count + giveaway.reserve_winners_count]
+    slots = winner_slots(giveaway)
+    selected = participants[: len(slots)]
     winners = []
 
-    for place, participant in enumerate(selected[: giveaway.winners_count], start=1):
+    for place, participant in zip(slots, selected):
         await GiveawayWinner().add_winner(
             giveaway_callback_value=giveaway.callback_value,
             user_id=participant["user_id"],
@@ -474,18 +495,6 @@ async def finish_giveaway(giveaway: GiveAway, reason: str = "schedule") -> list[
             is_reserve=False,
         )
         winners.append({**participant, "place": place, "is_reserve": False})
-
-    for place, participant in enumerate(selected[giveaway.winners_count :], start=1):
-        await GiveawayWinner().add_winner(
-            giveaway_callback_value=giveaway.callback_value,
-            user_id=participant["user_id"],
-            username=participant["username"],
-            first_name=participant["first_name"],
-            last_name=participant["last_name"],
-            place=place,
-            is_reserve=True,
-        )
-        winners.append({**participant, "place": place, "is_reserve": True})
 
     giveaway.run_status = False
     giveaway.finished_at = datetime.now(timezone_info)
@@ -508,22 +517,22 @@ async def finish_giveaway_with_manual_winner(giveaway: GiveAway, manual_winner: 
 
     await GiveawayWinner().delete_winners(giveaway.callback_value)
 
-    winners = [{**manual_winner, "place": 1, "is_reserve": False}]
+    slots = winner_slots(giveaway)
+    manual_place = slots.pop(0) if slots else 1
+    winners = [{**manual_winner, "place": manual_place, "is_reserve": False}]
     await GiveawayWinner().add_winner(
         giveaway_callback_value=giveaway.callback_value,
         user_id=manual_winner["user_id"],
         username=manual_winner["username"],
         first_name=manual_winner["first_name"],
         last_name=manual_winner["last_name"],
-        place=1,
+        place=manual_place,
         is_reserve=False,
     )
 
-    remaining_main_count = max(giveaway.winners_count - 1, 0)
-    selected_main = other_participants[:remaining_main_count]
-    selected_reserve = other_participants[remaining_main_count : remaining_main_count + giveaway.reserve_winners_count]
+    selected = other_participants[: len(slots)]
 
-    for place, participant in enumerate(selected_main, start=2):
+    for place, participant in zip(slots, selected):
         await GiveawayWinner().add_winner(
             giveaway_callback_value=giveaway.callback_value,
             user_id=participant["user_id"],
@@ -534,18 +543,6 @@ async def finish_giveaway_with_manual_winner(giveaway: GiveAway, manual_winner: 
             is_reserve=False,
         )
         winners.append({**participant, "place": place, "is_reserve": False})
-
-    for place, participant in enumerate(selected_reserve, start=1):
-        await GiveawayWinner().add_winner(
-            giveaway_callback_value=giveaway.callback_value,
-            user_id=participant["user_id"],
-            username=participant["username"],
-            first_name=participant["first_name"],
-            last_name=participant["last_name"],
-            place=place,
-            is_reserve=True,
-        )
-        winners.append({**participant, "place": place, "is_reserve": True})
 
     giveaway.run_status = False
     giveaway.finished_at = datetime.now(timezone_info)
@@ -564,14 +561,13 @@ async def notify_finish(giveaway: GiveAway, winners: list[dict], participants_co
     channel_text = f"<b>Розыгрыш завершен ✅</b>\n\n<b>{giveaway.name}</b>\n\n"
 
     if too_few:
-        owner_text += "Победителей выбрать не удалось: участников меньше, чем призовых мест."
-        channel_text += "Победителей выбрать не удалось: участников слишком мало."
+        owner_text += "Победителей выбрать не удалось: нет участников."
+        channel_text += "Победителей выбрать не удалось: нет участников."
     else:
         owner_text += "\n<b>Победители:</b>\n"
         channel_text += "<b>Победители:</b>\n"
         for winner in winners:
-            label = "Запасной" if winner["is_reserve"] else "Место"
-            line = f"{label} {winner['place']}: {user_label(winner)}\n"
+            line = f"Место {winner['place']}: {user_label(winner)}\n"
             owner_text += line
             channel_text += line
 
@@ -733,8 +729,9 @@ async def publish_giveaway(giveaway: GiveAway) -> tuple[bool, str]:
     text = (
         f"<b>{giveaway.name}</b>\n\n"
         f"{giveaway.text}\n\n"
-        f"Победителей: {giveaway.winners_count}\n"
-        f"Запасных: {giveaway.reserve_winners_count}\n"
+        f"Призовых мест: {prize_place_count(giveaway)}\n"
+        f"Победителей на место: {winners_per_prize_place(giveaway)}\n"
+        f"Всего победителей: {total_winner_slots(giveaway)}\n"
         f"Дата завершения: {giveaway.over_date.strftime('%d.%m.%Y %H:%M')}"
     )
 
@@ -885,7 +882,10 @@ async def create_end_at(message: types.Message, state: FSMContext):
 
     await state.update_data(over_date=over_date.isoformat())
     await AdminStates.create_winners_count.set()
-    await message.answer("Введите количество основных победителей.")
+    await message.answer(
+        "Введите количество призовых мест.\n\n"
+        "Например: если нужны места с 1 по 5, отправьте <code>5</code>."
+    )
 
 
 @dp.message_handler(state=AdminStates.create_winners_count)
@@ -895,13 +895,17 @@ async def create_winners_count(message: types.Message, state: FSMContext):
         return
     await state.update_data(winners_count=int(message.text))
     await AdminStates.create_reserve_count.set()
-    await message.answer("Введите количество запасных победителей. Можно 0.")
+    await message.answer(
+        "Введите количество победителей на каждое место.\n\n"
+        "Например: если на каждом месте должен быть 1 человек, отправьте <code>1</code>. "
+        "Если на каждом месте по 2 человека, отправьте <code>2</code>."
+    )
 
 
 @dp.message_handler(state=AdminStates.create_reserve_count)
 async def create_reserve_count(message: types.Message, state: FSMContext):
-    if not message.text.isdigit() or int(message.text) < 0:
-        await message.answer("Введите число 0 или больше.")
+    if not message.text.isdigit() or int(message.text) <= 0:
+        await message.answer("Введите положительное число.")
         return
     await state.update_data(reserve_winners_count=int(message.text))
     data = await state.get_data()
@@ -1095,9 +1099,10 @@ async def ask_manual_winner(callback: types.CallbackQuery, state: FSMContext):
     await state.update_data(giveaway_id=giveaway_id)
     await AdminStates.manual_winner.set()
     await callback.message.edit_text(
-        "Отправьте username участника, которого нужно назначить победителем.\n\n"
+        "Отправьте username участника, которого нужно назначить победителем на первое место.\n\n"
         "Пример: <code>@username</code>\n\n"
-        "Важно: пользователь уже должен быть среди участников этого розыгрыша.",
+        "Важно: пользователь уже должен быть среди участников этого розыгрыша. "
+        "Остальные призовые места бот заполнит автоматически из других участников.",
         reply_markup=back_menu(f"admin:show:{giveaway_id}"),
     )
 
@@ -1139,7 +1144,7 @@ async def manual_winner_message(message: types.Message, state: FSMContext):
 
     await finish_giveaway_with_manual_winner(giveaway, manual_winner)
     await state.finish()
-    await message.answer(f"Победитель назначен вручную: {user_label(manual_winner)}")
+    await message.answer(f"Победитель первого места назначен вручную: {user_label(manual_winner)}")
     await message.answer(
         await render_giveaway(await get_giveaway(giveaway.callback_value)),
         reply_markup=giveaway_actions(giveaway.callback_value, "finished"),
@@ -1182,7 +1187,11 @@ async def stats(callback: types.CallbackQuery):
     count = await GiveawayParticipant().count_participants(giveaway.callback_value)
     winners = await GiveawayWinner().get_winners(giveaway.callback_value)
     await callback.message.edit_text(
-        f"<b>{giveaway.name}</b>\n\nУчастников: {count}\nПобедителей выбрано: {len(winners)}",
+        f"<b>{giveaway.name}</b>\n\n"
+        f"Участников: {count}\n"
+        f"Призовых мест: {prize_place_count(giveaway)}\n"
+        f"Победителей на место: {winners_per_prize_place(giveaway)}\n"
+        f"Победителей выбрано: {len(winners)}",
         reply_markup=back_menu(f"admin:show:{giveaway.callback_value}"),
     )
 
@@ -1196,7 +1205,7 @@ async def results(callback: types.CallbackQuery):
     winners = await GiveawayWinner().get_winners(giveaway.callback_value)
     text = f"<b>Результаты: {giveaway.name}</b>\n\n"
     text += "\n".join(
-        f"{'Запасной' if winner['is_reserve'] else 'Место'} {winner['place']}: {user_label(winner)}"
+        f"Место {winner['place']}: {user_label(winner)}"
         for winner in winners
     ) or "Победители не выбраны."
     await callback.message.edit_text(text, reply_markup=back_menu(f"admin:show:{giveaway.callback_value}"))
