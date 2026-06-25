@@ -4,7 +4,7 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DIST_DIR = BASE_DIR / "dist"
-ZIP_PATH = DIST_DIR / "telegram-giveaway-bot.zip"
+ZIP_PATH = DIST_DIR / "Бот_для_розыгрышей_Telegram.zip"
 
 EXCLUDED_DIRS = {
     ".git",

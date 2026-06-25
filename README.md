@@ -19,7 +19,7 @@ Telegram bot for channel giveaways with a simple browser setup panel.
 For a detailed non-technical manual, open:
 
 ```text
-USER_GUIDE.md
+РУКОВОДСТВО_ПО_ИСПОЛЬЗОВАНИЮ.md
 ```
 
 1. Unzip the project.
@@ -127,7 +127,7 @@ BUILD_ZIP.command
 The zip is created at:
 
 ```text
-dist/telegram-giveaway-bot.zip
+dist/Бот_для_розыгрышей_Telegram.zip
 ```
 
 Do not send:
