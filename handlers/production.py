@@ -890,10 +890,11 @@ async def create_end_at(message: types.Message, state: FSMContext):
 
 @dp.message_handler(state=AdminStates.create_winners_count)
 async def create_winners_count(message: types.Message, state: FSMContext):
-    if not message.text.isdigit() or int(message.text) <= 0:
-        await message.answer("Введите положительное число.")
+    value = (message.text or "").strip()
+    if not value.isdigit() or int(value) <= 0:
+        await message.answer("Введите число призовых мест. Например: <code>5</code>.")
         return
-    await state.update_data(winners_count=int(message.text))
+    await state.update_data(winners_count=int(value))
     await AdminStates.create_reserve_count.set()
     await message.answer(
         "Введите количество победителей на каждое место.\n\n"
@@ -904,10 +905,11 @@ async def create_winners_count(message: types.Message, state: FSMContext):
 
 @dp.message_handler(state=AdminStates.create_reserve_count)
 async def create_reserve_count(message: types.Message, state: FSMContext):
-    if not message.text.isdigit() or int(message.text) <= 0:
-        await message.answer("Введите положительное число.")
+    value = (message.text or "").strip()
+    if not value.isdigit() or int(value) <= 0:
+        await message.answer("Введите число победителей на каждое место. Например: <code>1</code> или <code>2</code>.")
         return
-    await state.update_data(reserve_winners_count=int(message.text))
+    await state.update_data(reserve_winners_count=int(value))
     data = await state.get_data()
     if data["mode"] == "button":
         await AdminStates.create_captcha.set()

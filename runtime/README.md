@@ -2,7 +2,7 @@
 
 This directory is created for local runtime data:
 
-- `postgres-data/` - PostgreSQL data files managed by Docker Compose.
+- `giveaway-bot.sqlite3` - local SQLite database file.
 - `bot.pid` - running bot process id.
 - `control-panel.pid` - running Control Center process id.
 - `bot.log` - bot logs.

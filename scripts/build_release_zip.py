@@ -12,7 +12,6 @@ EXCLUDED_DIRS = {
     "__pycache__",
     ".pytest_cache",
     "dist",
-    "runtime/postgres-data",
 }
 
 EXCLUDED_FILES = {
@@ -25,6 +24,13 @@ EXCLUDED_SUFFIXES = {
     ".pyc",
     ".log",
     ".pid",
+    ".port",
+    ".sqlite3",
+    ".sqlite3-shm",
+    ".sqlite3-wal",
+    ".db",
+    ".db-shm",
+    ".db-wal",
 }
 
 
@@ -39,9 +45,6 @@ def is_excluded(path: Path) -> bool:
         return True
     if parts.intersection(EXCLUDED_DIRS):
         return True
-    if relative_text.startswith("runtime/postgres-data/"):
-        return True
-
     return False
 
 

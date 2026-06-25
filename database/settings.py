@@ -15,22 +15,16 @@ def ensure_database_path():
 
 async def ensure_runtime_schema():
     connection = Tortoise.get_connection("default")
-    if not database_url.startswith(("postgres://", "postgresql://")):
+    if not database_url.startswith("sqlite://"):
         return
 
-    await connection.execute_script(
-        """
-        ALTER TABLE IF EXISTS giveawaycondition
-        ADD COLUMN IF NOT EXISTS target_channel_url TEXT;
-
-        ALTER TABLE IF EXISTS giveawaycondition
-        ADD COLUMN IF NOT EXISTS condition_type VARCHAR(16) DEFAULT 'strict';
-
-        UPDATE giveawaycondition
-        SET condition_type = 'strict'
-        WHERE condition_type IS NULL;
-        """
-    )
+    existing_columns = await connection.execute_query_dict("PRAGMA table_info(giveawaycondition)")
+    column_names = {column["name"] for column in existing_columns}
+    if "target_channel_url" not in column_names:
+        await connection.execute_script("ALTER TABLE giveawaycondition ADD COLUMN target_channel_url TEXT;")
+    if "condition_type" not in column_names:
+        await connection.execute_script("ALTER TABLE giveawaycondition ADD COLUMN condition_type VARCHAR(16) DEFAULT 'strict';")
+    await connection.execute_script("UPDATE giveawaycondition SET condition_type = 'strict' WHERE condition_type IS NULL;")
 
 
 async def initialize_database():

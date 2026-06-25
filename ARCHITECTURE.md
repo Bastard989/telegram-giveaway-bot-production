@@ -9,18 +9,17 @@ config/                    Environment loading and owner access config
 database/                  Tortoise ORM setup and active models
 handlers/production.py     Active Telegram bot handlers and giveaway logic
 middlewares/               Access-control middleware
-docker-compose.yml         Local PostgreSQL service
-runtime/                   Local runtime data, logs, PIDs, PostgreSQL data
+runtime/                   Local runtime data, logs, PIDs, SQLite database
 ```
 
 ## Database
 
-The product uses PostgreSQL by default.
+The product uses SQLite by default.
 
-The local one-click setup is managed by Docker Compose. Data files live in:
+The local one-click setup creates a database file:
 
 ```text
-runtime/postgres-data/
+runtime/giveaway-bot.sqlite3
 ```
 
 Schema creation is handled by Tortoise ORM on bot startup.

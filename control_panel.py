@@ -31,26 +31,16 @@ ENV_KEYS = [
     "TIMEZONE",
     "START_TEXT",
     "COMMENT_GIVEAWAY_KEYWORD",
-    "POSTGRES_HOST",
-    "POSTGRES_PORT",
-    "POSTGRES_DB",
-    "POSTGRES_USER",
-    "POSTGRES_PASSWORD",
 ]
 
 DEFAULT_ENV = {
     "BOT_TOKEN": "",
-    "DATABASE_URL": "postgres://giveaway_bot:giveaway_bot@127.0.0.1:55432/giveaway_bot",
+    "DATABASE_URL": "sqlite://runtime/giveaway-bot.sqlite3",
     "OWNERS": "",
     "OWNER_USERNAMES": "",
     "TIMEZONE": "Europe/Moscow",
     "START_TEXT": "Главное меню:",
     "COMMENT_GIVEAWAY_KEYWORD": "Участвую",
-    "POSTGRES_HOST": "127.0.0.1",
-    "POSTGRES_PORT": "55432",
-    "POSTGRES_DB": "giveaway_bot",
-    "POSTGRES_USER": "giveaway_bot",
-    "POSTGRES_PASSWORD": "giveaway_bot",
 }
 
 
@@ -91,11 +81,8 @@ def write_env(data: dict[str, str]):
     ENV_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def build_database_url(config: dict[str, str]) -> str:
-    return (
-        f"postgres://{config['POSTGRES_USER']}:{config['POSTGRES_PASSWORD']}"
-        f"@{config['POSTGRES_HOST']}:{config['POSTGRES_PORT']}/{config['POSTGRES_DB']}"
-    )
+def local_sqlite_url() -> str:
+    return "sqlite://runtime/giveaway-bot.sqlite3"
 
 
 def is_port_free(port: int, host: str = "127.0.0.1") -> bool:
@@ -231,43 +218,15 @@ def install_dependencies() -> str:
     return "Зависимости установлены."
 
 
-def docker_command() -> list[str] | None:
-    ok, _ = run_command(["docker", "compose", "version"], timeout=15)
-    if ok:
-        return ["docker", "compose"]
-
-    ok, _ = run_command(["docker-compose", "version"], timeout=15)
-    if ok:
-        return ["docker-compose"]
-
-    return None
-
-
-def prepare_postgres() -> str:
+def prepare_database() -> str:
     config = read_env()
-    config["POSTGRES_HOST"] = config.get("POSTGRES_HOST") or "127.0.0.1"
-    config["POSTGRES_DB"] = config.get("POSTGRES_DB") or "giveaway_bot"
-    config["POSTGRES_USER"] = config.get("POSTGRES_USER") or "giveaway_bot"
-    config["POSTGRES_PASSWORD"] = config.get("POSTGRES_PASSWORD") or "giveaway_bot"
-
-    current_port = int(config.get("POSTGRES_PORT") or "55432")
-    if not is_port_free(current_port):
-        current_port = find_free_port(55432, 55532)
-    config["POSTGRES_PORT"] = str(current_port)
-    config["DATABASE_URL"] = build_database_url(config)
+    config["DATABASE_URL"] = local_sqlite_url()
     write_env(config)
 
-    command = docker_command()
-    if not command:
-        return "Docker не найден. Установите Docker Desktop или подключите внешний PostgreSQL в поле DATABASE_URL."
-
-    env = os.environ.copy()
-    env.update(config)
-    ok, output = run_command([*command, "up", "-d", "postgres"], env=env, timeout=180)
-    if not ok:
-        return "PostgreSQL не запустился.\n" + output
-
-    return f"PostgreSQL запущен. База проекта: runtime/postgres-data, порт: {current_port}."
+    db_path = BASE_DIR / "runtime" / "giveaway-bot.sqlite3"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    db_path.touch(exist_ok=True)
+    return "Локальная база данных подготовлена. Она хранится в папке runtime внутри проекта."
 
 
 def validate_config(config: dict[str, str]) -> list[str]:
@@ -471,32 +430,10 @@ def render_page(message: str = "") -> str:
       <div class="hint">Этот текст видит владелец, когда пишет боту /start.</div>
 
       <details>
-        <summary>Дополнительные настройки базы данных</summary>
+        <summary>Дополнительная настройка базы данных</summary>
         <label>Адрес базы данных</label>
         <input name="DATABASE_URL" value="{value('DATABASE_URL')}">
         <div class="hint">Обычно менять не нужно. Кнопка подготовки базы заполнит это поле сама.</div>
-
-        <div class="row">
-          <div>
-            <label>Порт базы</label>
-            <input name="POSTGRES_PORT" value="{value('POSTGRES_PORT')}">
-          </div>
-          <div>
-            <label>Название базы</label>
-            <input name="POSTGRES_DB" value="{value('POSTGRES_DB')}">
-          </div>
-        </div>
-
-        <div class="row">
-          <div>
-            <label>Логин базы</label>
-            <input name="POSTGRES_USER" value="{value('POSTGRES_USER')}">
-          </div>
-          <div>
-            <label>Пароль базы</label>
-            <input name="POSTGRES_PASSWORD" value="{value('POSTGRES_PASSWORD')}">
-          </div>
-        </div>
       </details>
 
       <div class="actions">
@@ -509,9 +446,9 @@ def render_page(message: str = "") -> str:
     <h2>2. Подготовка</h2>
     <form class="actions" method="post">
       <button class="secondary" formaction="/install-deps">Установить нужные файлы</button>
-      <button class="warning" formaction="/prepare-postgres">Подготовить базу данных</button>
+      <button class="warning" formaction="/prepare-database">Подготовить базу данных</button>
     </form>
-    <p>Сначала нажмите установку нужных файлов, потом подготовку базы данных. Для базы нужен Docker Desktop.</p>
+    <p>Сначала нажмите установку нужных файлов, потом подготовку базы данных. База создаётся автоматически внутри папки проекта.</p>
   </section>
 
   <section>
@@ -576,8 +513,8 @@ class Handler(BaseHTTPRequestHandler):
                 return "Настройки сохранены."
             if path == "/install-deps":
                 return install_dependencies()
-            if path == "/prepare-postgres":
-                return prepare_postgres()
+            if path == "/prepare-database":
+                return prepare_database()
             if path == "/start-bot":
                 return start_bot()
             if path == "/stop-bot":

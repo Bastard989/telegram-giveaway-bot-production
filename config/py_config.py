@@ -27,7 +27,7 @@ def _parse_owners(value: str) -> list[int]:
     owners = []
     for item in value.split(","):
         item = item.strip()
-        if item:
+        if item and item.isdigit():
             owners.append(int(item))
 
     return owners

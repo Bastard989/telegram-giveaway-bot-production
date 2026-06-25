@@ -1,6 +1,6 @@
 # Telegram Giveaway Bot
 
-Production-oriented Telegram bot for channel giveaways.
+Telegram bot for channel giveaways with a simple browser setup panel.
 
 ## What It Does
 
@@ -11,46 +11,46 @@ Production-oriented Telegram bot for channel giveaways.
 - Selects winners by prize places.
 - Allows manual winner selection by participant username.
 - Exports participants to CSV.
-- Uses PostgreSQL as the production database.
-- Includes a local browser Control Center for non-technical setup.
+- Stores data in a local database file inside the project.
+- Includes a local browser panel for non-technical setup.
 
 ## Fast Start For Client
 
 1. Unzip the project.
 2. Open `START.command` on macOS or `START.bat` on Windows.
-3. The browser Control Center opens automatically.
+3. The browser setup panel opens automatically.
 4. Fill:
    - BotFather token.
    - Telegram owner ID or owner username.
-5. Click `Save settings`.
-6. Click `Install dependencies`.
-7. Click `Prepare PostgreSQL`.
-8. Click `Start bot`.
+5. Click `Сохранить настройки`.
+6. Click `Установить нужные файлы`.
+7. Click `Подготовить базу данных`.
+8. Click `Запустить бота`.
 9. Open Telegram and send `/start` to the bot.
 
-The Control Center chooses a free browser port automatically. Do not manually open `127.0.0.1:8088` unless the Control Center is running and printed that exact port.
+No separate database program is required.
 
 ## Database
 
-The default database is PostgreSQL through Docker Compose.
+The default database is SQLite.
 
-The database files are stored inside the project:
+It is a normal file inside the project:
 
 ```text
-runtime/postgres-data/
+runtime/giveaway-bot.sqlite3
 ```
 
-The Control Center writes the correct `DATABASE_URL` to `.env` automatically after `Prepare PostgreSQL`.
+The setup panel creates it automatically when you click:
 
-Default local database URL:
+```text
+Подготовить базу данных
+```
+
+Default database URL:
 
 ```env
-DATABASE_URL=postgres://giveaway_bot:giveaway_bot@127.0.0.1:55432/giveaway_bot
+DATABASE_URL=sqlite://runtime/giveaway-bot.sqlite3
 ```
-
-If port `55432` is busy, the Control Center selects another free port and updates `.env`.
-
-Docker Desktop is required for the one-click PostgreSQL setup. If Docker is not installed, install Docker Desktop or use an external PostgreSQL database and paste its `DATABASE_URL` manually.
 
 ## Telegram Admin Rights
 
@@ -73,6 +73,19 @@ Comment giveaways:
 
 - The bot must be admin in the linked discussion group while comments are collected.
 
+## Prize Places Logic
+
+The bot asks two separate questions:
+
+1. Prize places count.
+2. Winners per each place.
+
+Examples:
+
+- `1` prize place and `1` winner per place = 1 total winner.
+- `5` prize places and `1` winner per place = places 1, 2, 3, 4, 5 with one winner each.
+- `5` prize places and `2` winners per place = 10 total winners: two people for each place.
+
 ## Manual Winner Selection
 
 For an active giveaway, open the giveaway card and click:
@@ -88,61 +101,6 @@ Then send the participant username, for example:
 ```
 
 The user must already be in the participant list. The manual winner becomes one of the winners for place 1. If the giveaway has more winner slots, the remaining slots are filled randomly from the other participants.
-
-## Prize Places Logic
-
-The bot asks two separate questions:
-
-1. Prize places count.
-2. Winners per each place.
-
-Examples:
-
-- `1` prize place and `1` winner per place = 1 total winner.
-- `5` prize places and `1` winner per place = places 1, 2, 3, 4, 5 with one winner each.
-- `5` prize places and `2` winners per place = 10 total winners: two people for each place.
-
-## Manual Start
-
-If you do not use `START.command` or `START.bat`:
-
-```bash
-python3 control_panel.py
-```
-
-The Control Center prints the selected local URL and opens it in the browser.
-
-## Environment
-
-`.env` is generated locally and must not be committed or sent publicly.
-
-Main fields:
-
-```env
-BOT_TOKEN=put_botfather_token_here
-DATABASE_URL=postgres://giveaway_bot:giveaway_bot@127.0.0.1:55432/giveaway_bot
-OWNERS=123456789
-OWNER_USERNAMES=
-TIMEZONE=Europe/Moscow
-START_TEXT=Главное меню:
-COMMENT_GIVEAWAY_KEYWORD=Участвую
-POSTGRES_HOST=127.0.0.1
-POSTGRES_PORT=55432
-POSTGRES_DB=giveaway_bot
-POSTGRES_USER=giveaway_bot
-POSTGRES_PASSWORD=giveaway_bot
-```
-
-Prefer numeric `OWNERS`. Username access is convenient, but numeric ID is safer.
-
-## Process Rules
-
-- Only one bot process should run.
-- When `Start bot` is pressed, an old bot process is stopped first.
-- When `Restart bot` is pressed, the old process is stopped and a new one is started.
-- When the Control Center process is closed, the bot process started by it is stopped too.
-- Logs are stored in `runtime/bot.log` and `runtime/control-panel.log`.
-- Logs are not shown in the simple UI, but remain available in `runtime/` for troubleshooting.
 
 ## Delivery Notes
 
@@ -170,7 +128,7 @@ Do not send:
 - `.venv/`
 - `.git/`
 - `__pycache__/`
-- `runtime/postgres-data/` unless you intentionally want to transfer local database contents
+- `runtime/giveaway-bot.sqlite3` unless you intentionally want to transfer local data
 - `runtime/*.pid`
 - `runtime/*.log`
 
