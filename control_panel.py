@@ -252,7 +252,7 @@ def clear_saved_token() -> str:
     config = read_env()
     config["BOT_TOKEN"] = ""
     write_env(config)
-    return "Токен очищен. Перед передачей клиенту также используйте release zip: он не содержит .env."
+    return "Токен очищен. Для публикации проекта используйте release zip: он не содержит .env."
 
 
 def database_file_path(config: dict[str, str]) -> Path | None:
@@ -605,7 +605,7 @@ def render_page(message: str = "") -> str:
       <button formaction="/start-bot">Запустить с сохранёнными настройками</button>
       <button class="stop" formaction="/stop-bot">Остановить бота</button>
       <button class="secondary" formaction="/restart-bot">Перезапустить бота</button>
-      <button class="warning" formaction="/clear-token">Очистить токен перед передачей</button>
+      <button class="warning" formaction="/clear-token">Очистить сохранённый токен</button>
     </form>
     <p>Если бот уже был запущен, новый запуск сначала остановит старый процесс.</p>
   </section>
