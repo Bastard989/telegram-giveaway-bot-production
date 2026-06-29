@@ -37,6 +37,8 @@ class ControlPanelTest(unittest.TestCase):
             self.assertNotIn("ALL_PROXY", retry_env)
             self.assertNotIn("PIP_PROXY", retry_env)
             self.assertEqual(retry_env["PIP_CONFIG_FILE"], control_panel.os.devnull)
+            self.assertEqual(retry_env["NO_PROXY"], "*")
+            self.assertEqual(retry_env["no_proxy"], "*")
 
     def test_backup_database_copies_sqlite_file(self):
         with tempfile.TemporaryDirectory() as tmp:

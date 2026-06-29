@@ -276,6 +276,9 @@ def install_dependencies() -> str:
         clean_env.pop("PIP_PROXY", None)
         clean_env.pop("pip_proxy", None)
         clean_env["PIP_CONFIG_FILE"] = os.devnull
+        clean_env["NO_PROXY"] = "*"
+        clean_env["no_proxy"] = "*"
+        clean_env["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
         isolated_command = [
             str(py),
             "-m",
