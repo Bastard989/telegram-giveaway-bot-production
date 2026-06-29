@@ -1,10 +1,8 @@
 import atexit
 import html
-import importlib.util
 import os
 import signal
 import socket
-import shutil
 import sqlite3
 import subprocess
 import sys
@@ -28,6 +26,23 @@ PANEL_PORT_PATH = RUNTIME_DIR / "control-panel.port"
 BOT_LOG_PATH = RUNTIME_DIR / "bot.log"
 PANEL_LOG_PATH = RUNTIME_DIR / "control-panel.log"
 BACKUP_DIR = RUNTIME_DIR / "backups"
+
+REQUIRED_MODULES = {
+    "aiogram": "aiogram",
+    "aiohttp": "aiohttp",
+    "aiosqlite": "aiosqlite",
+    "pytz": "pytz",
+    "tortoise": "tortoise-orm",
+    "tzdata": "tzdata",
+}
+PROXY_ENV_KEYS = (
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+)
 
 ENV_KEYS = [
     "BOT_TOKEN",
@@ -131,6 +146,15 @@ def terminate_pid(pid: int, timeout: float = 8):
     if not pid_is_running(pid):
         return
 
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/PID", str(pid), "/T", "/F"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        return
+
     try:
         os.kill(pid, signal.SIGTERM)
     except OSError:
@@ -178,12 +202,25 @@ def python_executable() -> Path:
     return candidate if candidate.exists() else Path(sys.executable)
 
 
-def pip_executable() -> Path:
-    if os.name == "nt":
-        candidate = BASE_DIR / ".venv" / "Scripts" / "pip.exe"
-    else:
-        candidate = BASE_DIR / ".venv" / "bin" / "pip"
-    return candidate
+def supported_python(python: Path) -> tuple[bool, str]:
+    try:
+        result = subprocess.run(
+            [str(python), "-c", "import sys; print('.'.join(map(str, sys.version_info[:3])))"],
+            cwd=BASE_DIR,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=15,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return False, str(exc)
+
+    version = (result.stdout or "неизвестно").strip()
+    try:
+        major, minor, *_ = (int(part) for part in version.split("."))
+    except ValueError:
+        return False, version
+    return major == 3 and minor in (10, 11), version
 
 
 def run_command(command: list[str], env: dict[str, str] | None = None, timeout: int | None = None) -> tuple[bool, str]:
@@ -212,16 +249,40 @@ def run_command(command: list[str], env: dict[str, str] | None = None, timeout: 
 def install_dependencies() -> str:
     venv_dir = BASE_DIR / ".venv"
     if not venv_dir.exists():
+        compatible, version = supported_python(Path(sys.executable))
+        if not compatible:
+            return (
+                f"Для этой версии бота нужен Python 3.10 или 3.11, сейчас запущен Python {version}. "
+                "Закройте панель и снова запустите START.bat: он предложит установить Python 3.11."
+            )
         ok, output = run_command([sys.executable, "-m", "venv", str(venv_dir)], timeout=120)
         if not ok:
             return "Не удалось создать .venv.\n" + output
 
-    pip_path = pip_executable()
-    ok, output = run_command([str(pip_path), "install", "-r", "requirements.txt"], timeout=600)
+    py = python_executable()
+    compatible, version = supported_python(py)
+    if not compatible:
+        return (
+            f"Папка .venv создана несовместимым или недоступным Python ({version}). "
+            "Удалите только папку .venv, установите Python 3.11 и снова нажмите эту кнопку."
+        )
+
+    command = [str(py), "-m", "pip", "install", "-r", "requirements.txt"]
+    ok, output = run_command(command, timeout=600)
+    if not ok and "Missing dependencies for SOCKS support" in output:
+        clean_env = os.environ.copy()
+        removed = []
+        for key in PROXY_ENV_KEYS:
+            if clean_env.get(key, "").lower().startswith(("socks://", "socks5://", "socks5h://")):
+                removed.append(key)
+                clean_env.pop(key, None)
+        if removed:
+            log("Retrying pip without broken SOCKS proxy variables: " + ", ".join(removed))
+            ok, output = run_command(command, env=clean_env, timeout=600)
     if not ok:
         return "Не удалось установить зависимости.\n" + output
 
-    return "Зависимости установлены."
+    return f"Зависимости установлены в .venv (Python {version})."
 
 
 def prepare_database() -> str:
@@ -244,7 +305,15 @@ def backup_database() -> str:
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%d-%H%M%S")
     backup_path = BACKUP_DIR / f"{db_path.stem}-{stamp}{db_path.suffix or '.sqlite3'}"
-    shutil.copy2(db_path, backup_path)
+    try:
+        with sqlite3.connect(db_path) as source, sqlite3.connect(backup_path) as destination:
+            source.backup(destination)
+    except sqlite3.Error as exc:
+        try:
+            backup_path.unlink()
+        except FileNotFoundError:
+            pass
+        return f"Не удалось создать backup SQLite: {exc}"
     return f"Backup базы создан: {backup_path.relative_to(BASE_DIR)}"
 
 
@@ -281,8 +350,34 @@ def validate_config(config: dict[str, str]) -> list[str]:
     return errors
 
 
-def dependency_is_installed(module_name: str) -> bool:
-    return importlib.util.find_spec(module_name) is not None
+def dependency_is_installed(module_name: str, python: Path | None = None) -> bool:
+    py = python or python_executable()
+    try:
+        result = subprocess.run(
+            [str(py), "-c", f"import {module_name}"],
+            cwd=BASE_DIR,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=15,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
+
+
+def timezone_is_available(timezone_name: str, python: Path | None = None) -> bool:
+    py = python or python_executable()
+    try:
+        result = subprocess.run(
+            [str(py), "-c", "from zoneinfo import ZoneInfo; import sys; ZoneInfo(sys.argv[1])", timezone_name],
+            cwd=BASE_DIR,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=15,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
 
 
 def check_token_valid(token: str) -> tuple[bool, str]:
@@ -316,13 +411,22 @@ def check_database_available(config: dict[str, str]) -> tuple[bool, str]:
 
 def check_environment() -> str:
     config = read_env()
-    dependencies = ["aiogram", "aiohttp", "aiosqlite", "pytz", "tortoise"]
-    missing_dependencies = [name for name in dependencies if not dependency_is_installed(name)]
+    py = python_executable()
+    compatible, version = supported_python(py)
+    missing_dependencies = [
+        package_name
+        for module_name, package_name in REQUIRED_MODULES.items()
+        if not dependency_is_installed(module_name, py)
+    ]
+    timezone_name = config.get("TIMEZONE", "Europe/Moscow")
+    timezone_ok = timezone_is_available(timezone_name, py)
     token_ok, token_message = check_token_valid(config.get("BOT_TOKEN", ""))
     db_ok, db_message = check_database_available(config)
     lines = [
-        f"Python найден: {sys.version.split()[0]} ({sys.executable})",
+        f"Python бота: {version} ({py})",
+        "Версия Python совместима: " + ("да" if compatible else "нет — нужен Python 3.10 или 3.11"),
         "Зависимости установлены: " + ("да" if not missing_dependencies else "нет: " + ", ".join(missing_dependencies)),
+        f"Часовой пояс {timezone_name}: " + ("доступен" if timezone_ok else "не найден — установите tzdata"),
         "Токен валиден: " + ("да" if token_ok else "нет") + f" ({token_message})",
         "База доступна: " + ("да" if db_ok else "нет") + f" ({db_message})",
     ]
@@ -345,25 +449,60 @@ def start_bot() -> str:
     if errors:
         return " ".join(errors)
 
+    py = python_executable()
+    compatible, version = supported_python(py)
+    if not compatible:
+        return f"Бот не запущен: нужен Python 3.10 или 3.11, найден {version}."
+    missing_dependencies = [
+        package_name
+        for module_name, package_name in REQUIRED_MODULES.items()
+        if not dependency_is_installed(module_name, py)
+    ]
+    if missing_dependencies:
+        return "Бот не запущен. Сначала установите зависимости: " + ", ".join(missing_dependencies)
+    timezone_name = config.get("TIMEZONE", "Europe/Moscow")
+    if not timezone_is_available(timezone_name, py):
+        return f"Бот не запущен: часовой пояс {timezone_name} недоступен. Установите tzdata."
+
     db_path = database_file_path(config)
     if db_path:
         db_path.parent.mkdir(parents=True, exist_ok=True)
 
     ensure_runtime_dir()
-    BOT_LOG_PATH.write_text("", encoding="utf-8")
-    py = python_executable()
-    with BOT_LOG_PATH.open("a", encoding="utf-8") as log_file:
+    log_path = BOT_LOG_PATH
+    try:
+        log_file = log_path.open("a", encoding="utf-8")
+    except PermissionError:
+        log_path = RUNTIME_DIR / f"bot-{time.strftime('%Y%m%d-%H%M%S')}.log"
+        log_file = log_path.open("a", encoding="utf-8")
+
+    log_file.write(f"\n=== Запуск {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n")
+    log_file.flush()
+    popen_options = {
+        "cwd": BASE_DIR,
+        "stdout": log_file,
+        "stderr": subprocess.STDOUT,
+        "env": os.environ.copy(),
+        "close_fds": True,
+    }
+    if os.name == "nt":
+        popen_options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        popen_options["start_new_session"] = True
+    try:
         process = subprocess.Popen(
             [str(py), "app.py"],
-            cwd=BASE_DIR,
-            stdout=log_file,
-            stderr=subprocess.STDOUT,
-            env=os.environ.copy(),
-            start_new_session=(os.name != "nt"),
+            **popen_options,
         )
+    finally:
+        log_file.close()
+
+    time.sleep(0.5)
+    if process.poll() is not None:
+        return f"Бот завершился при запуске. Откройте лог {log_path.relative_to(BASE_DIR)}."
 
     BOT_PID_PATH.write_text(str(process.pid), encoding="utf-8")
-    log(f"Started bot PID {process.pid}")
+    log(f"Started bot PID {process.pid}; log: {log_path.relative_to(BASE_DIR)}")
     return "Бот запущен."
 
 

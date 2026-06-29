@@ -40,6 +40,17 @@ runtime/control-panel.pid
 runtime/control-panel.port
 ```
 
+On Windows, `RUN_BOT_WINDOWS.bat` wraps `START.bat` in a persistent Command Prompt so startup errors remain visible instead of disappearing with the window. Both launchers contain ASCII-only commands for compatibility with Windows command-shell encodings.
+
+## Giveaway Completion
+
+Manual winner selection is a two-phase flow:
+
+1. `preselect_manual_winner` stores the chosen participant as the first-place winner while the giveaway remains active.
+2. `finish_giveaway` preserves valid preselected winners, fills the remaining slots randomly, marks the giveaway finished, and publishes results.
+
+Media posts store separate Telegram file IDs for photos, videos, and animations. Existing SQLite databases receive the nullable `animation_id` column through the runtime schema migration.
+
 ## Removed Legacy Code
 
 The downloaded source contained an older inactive implementation:

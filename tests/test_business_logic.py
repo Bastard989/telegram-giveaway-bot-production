@@ -43,6 +43,7 @@ class FakeWinnerRepo:
 
     async def delete_winners(self, callback_value):
         self.deleted = True
+        self.saved = []
 
     async def add_winner(self, **kwargs):
         self.saved.append(kwargs)
@@ -52,6 +53,39 @@ class FakeWinnerRepo:
 
 
 class BusinessLogicTest(unittest.IsolatedAsyncioTestCase):
+    def test_giveaway_text_supports_quote_prefix_and_formatting(self):
+        text = "Заголовок\n> Строка с цитатой"
+        bold = SimpleNamespace(type="bold", offset=0, length=9)
+
+        rendered = production.format_giveaway_text(text, [bold])
+
+        self.assertEqual(rendered, "<b>Заголовок</b>\n<blockquote>Строка с цитатой</blockquote>")
+
+    def test_giveaway_text_keeps_native_telegram_blockquote(self):
+        text = "Нативная цитата"
+        blockquote = SimpleNamespace(type="blockquote", offset=0, length=len(text))
+
+        rendered = production.format_giveaway_text(text, [blockquote])
+
+        self.assertEqual(rendered, "<blockquote>Нативная цитата</blockquote>")
+
+    async def test_create_media_accepts_telegram_animation(self):
+        message = SimpleNamespace(
+            content_type="animation",
+            animation=SimpleNamespace(file_id="gif-file-id"),
+            answer=AsyncMock(),
+        )
+        state = SimpleNamespace(update_data=AsyncMock())
+
+        with patch.object(production.AdminStates.create_end_at, "set", new=AsyncMock()):
+            await production.create_media(message, state)
+
+        state.update_data.assert_awaited_once_with(
+            photo_id=None,
+            video_id=None,
+            animation_id="gif-file-id",
+        )
+
     def test_prize_place_count_and_total_slots(self):
         giveaway = SimpleNamespace(winners_count=5, reserve_winners_count=2)
 
@@ -80,6 +114,54 @@ class BusinessLogicTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(giveaway.run_status)
         self.assertIsNotNone(giveaway.finished_at)
         self.assertEqual(len(winner_repo.saved), 2)
+
+    async def test_manual_winner_is_preselected_without_finishing_giveaway(self):
+        giveaway = FakeGiveaway()
+        winner_repo = FakeWinnerRepo()
+        participant = {
+            "user_id": 7,
+            "username": "manual",
+            "first_name": "Manual",
+            "last_name": "Winner",
+        }
+
+        with patch.object(production, "GiveawayWinner", return_value=winner_repo):
+            winner = await production.preselect_manual_winner(giveaway, participant)
+
+        self.assertTrue(giveaway.run_status)
+        self.assertIsNone(giveaway.finished_at)
+        self.assertEqual(winner["user_id"], 7)
+        self.assertEqual(winner_repo.saved[0]["place"], 1)
+
+    async def test_finish_giveaway_preserves_preselected_winner(self):
+        giveaway = FakeGiveaway(winners_count=2, reserve_winners_count=1)
+        participants = [
+            {"user_id": 1, "username": "one", "first_name": "One", "last_name": ""},
+            {"user_id": 2, "username": "two", "first_name": "Two", "last_name": ""},
+            {"user_id": 3, "username": "manual", "first_name": "Manual", "last_name": ""},
+        ]
+        winner_repo = FakeWinnerRepo()
+        winner_repo.saved = [
+            {
+                "user_id": 3,
+                "username": "manual",
+                "first_name": "Manual",
+                "last_name": "",
+                "place": 1,
+                "is_reserve": False,
+            }
+        ]
+
+        with patch.object(production, "GiveawayParticipant", return_value=FakeParticipantRepo(participants)):
+            with patch.object(production, "GiveawayWinner", return_value=winner_repo):
+                with patch.object(production.secure_random, "shuffle", lambda items: None):
+                    with patch.object(production, "notify_finish", new=AsyncMock()):
+                        winners = await production.finish_giveaway(giveaway, reason="test")
+
+        self.assertEqual([winner["user_id"] for winner in winners], [3, 1])
+        self.assertEqual([winner["place"] for winner in winners], [1, 2])
+        self.assertFalse(giveaway.run_status)
+        self.assertIsNotNone(giveaway.finished_at)
 
     def test_strict_subscription_conditions_ignore_soft_links(self):
         conditions = [

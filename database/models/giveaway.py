@@ -16,6 +16,7 @@ class GiveAway(Model):
     text = fields.TextField()
     photo_id = fields.TextField(null=True)
     video_id = fields.TextField(null=True)
+    animation_id = fields.TextField(null=True)
     over_date = fields.DatetimeField()
     captcha = fields.BooleanField()
     winners_count = fields.IntField()
@@ -44,6 +45,7 @@ class GiveAway(Model):
         participation_mode: str = "button",
         publish_channel_id: int | None = None,
         publish_channel_name: str | None = None,
+        animation_id: str | None = None,
     ):
         random_callback_value = ''.join(
             random.choices(
@@ -60,6 +62,7 @@ class GiveAway(Model):
             text=text,
             photo_id=photo_id,
             video_id=video_id,
+            animation_id=animation_id,
             over_date=over_date,
             captcha=captcha,
             winners_count=winners_count,
@@ -143,6 +146,7 @@ class GiveAway(Model):
             'text',
             'photo_id',
             'video_id',
+            'animation_id',
             'over_date',
             'captcha',
             'winners_count',
@@ -161,6 +165,7 @@ class GiveAway(Model):
             'text',
             'photo_id',
             'video_id',
+            'animation_id',
             'over_date',
             'captcha',
             'winners_count',

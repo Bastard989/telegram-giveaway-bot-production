@@ -2,4 +2,5 @@ aiogram==2.25.2
 aiohttp<3.9
 aiosqlite
 pytz
+tzdata
 tortoise-orm

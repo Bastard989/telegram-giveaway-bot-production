@@ -1,20 +1,18 @@
 @echo off
-chcp 65001 >nul
+setlocal
 cd /d "%~dp0"
 
-echo Запуск панели Telegram Giveaway Bot...
+echo Starting Telegram Giveaway Bot control panel...
 echo.
 
 set "PYTHON_CMD="
 call :detect_python
 if defined PYTHON_CMD goto run_panel
 
-echo Python не найден.
+echo Compatible Python was not found.
+echo This bot requires Python 3.10 or Python 3.11.
 echo.
-echo Боту нужен Python 3.10 или новее.
-echo Можно попробовать установить Python автоматически.
-echo.
-choice /C YN /M "Установить Python автоматически сейчас?"
+choice /C YN /M "Install Python 3.11 automatically now?"
 if errorlevel 2 goto manual_python
 
 call :install_python
@@ -23,17 +21,23 @@ call :detect_python
 if defined PYTHON_CMD goto run_panel
 
 echo.
-echo Python установлен или установка была запущена, но текущая консоль пока не видит команду Python.
-echo Закройте это окно и снова откройте START.bat.
+echo Python installation finished, but Windows cannot see it yet.
+echo Close this window and run RUN_BOT_WINDOWS.bat again.
 echo.
 pause
 exit /b 1
 
 :run_panel
-echo Используется: %PYTHON_CMD%
+echo Using: %PYTHON_CMD%
+echo The browser should open automatically.
+echo Keep this window open while the bot is running.
 echo.
 %PYTHON_CMD% control_panel.py
-goto end
+echo.
+echo The control panel has stopped or failed to start.
+echo Take a photo of this window if an error is shown above.
+pause
+exit /b 1
 
 :detect_python
 py -3.11 --version >nul 2>nul
@@ -42,13 +46,13 @@ if not errorlevel 1 (
     exit /b 0
 )
 
-py -3 --version >nul 2>nul
+py -3.10 --version >nul 2>nul
 if not errorlevel 1 (
-    set "PYTHON_CMD=py -3"
+    set "PYTHON_CMD=py -3.10"
     exit /b 0
 )
 
-python --version >nul 2>nul
+python -c "import sys; raise SystemExit(0 if sys.version_info[:2] in ((3, 10), (3, 11)) else 1)" >nul 2>nul
 if not errorlevel 1 (
     set "PYTHON_CMD=python"
     exit /b 0
@@ -61,8 +65,8 @@ where winget >nul 2>nul
 if errorlevel 1 goto no_winget
 
 echo.
-echo Устанавливаю Python 3.11 через Windows Package Manager...
-echo Если Windows спросит разрешение, подтвердите установку.
+echo Installing Python 3.11 through Windows Package Manager...
+echo Confirm the Windows installation prompt if it appears.
 echo.
 winget install --id Python.Python.3.11 -e --source winget --accept-package-agreements --accept-source-agreements
 if errorlevel 1 goto install_failed
@@ -70,48 +74,20 @@ exit /b 0
 
 :no_winget
 echo.
-echo Автоустановщик winget не найден.
-echo Сейчас откроется страница скачивания Python.
-start "" "https://www.python.org/downloads/windows/"
-echo.
-echo Скачайте Python 3.11 или новее.
-echo Во время установки обязательно включите галочку "Add Python to PATH".
-echo После установки снова откройте START.bat.
-echo.
-pause
-exit /b 1
+echo Windows Package Manager was not found.
+goto manual_python
 
 :install_failed
 echo.
-echo Автоматическая установка Python не завершилась.
-echo Сейчас откроется страница скачивания Python.
-start "" "https://www.python.org/downloads/windows/"
-echo.
-echo Скачайте Python 3.11 или новее.
-echo Во время установки обязательно включите галочку "Add Python to PATH".
-echo После установки снова откройте START.bat.
-echo.
-pause
-exit /b 1
+echo Automatic Python installation failed.
+goto manual_python
 
 :manual_python
-echo.
-echo Сейчас откроется страница скачивания Python.
 start "" "https://www.python.org/downloads/windows/"
 echo.
-echo Скачайте Python 3.11 или новее.
-echo Во время установки обязательно включите галочку "Add Python to PATH".
-echo После установки снова откройте START.bat.
+echo Download and install Python 3.11.
+echo Enable the Add Python to PATH option during installation.
+echo Then run RUN_BOT_WINDOWS.bat again.
 echo.
 pause
 exit /b 1
-
-:end
-if errorlevel 1 (
-    echo.
-    echo Панель не запустилась.
-    echo Проверьте, установлен ли Python 3.10 или новее.
-    echo Если ошибка повторяется, откройте руководство по использованию.
-    echo.
-    pause
-)

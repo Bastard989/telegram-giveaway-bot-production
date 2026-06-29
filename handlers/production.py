@@ -13,6 +13,7 @@ from aiogram import types
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, InputFile
+from aiogram.utils.text_decorations import HtmlDecoration
 from tortoise.exceptions import IntegrityError
 
 from app import bot, dp
@@ -37,6 +38,26 @@ PRIVATE_CHANNEL_LINK_RE = re.compile(
     re.IGNORECASE,
 )
 USERNAME_RE = re.compile(r"^@?([A-Za-z0-9_]{5,32})$")
+
+
+class GiveawayHtmlDecoration(HtmlDecoration):
+    def apply_entity(self, entity, text: str) -> str:
+        if entity.type in {"blockquote", "expandable_blockquote"}:
+            expandable = ' expandable=""' if entity.type == "expandable_blockquote" else ""
+            return f"<blockquote{expandable}>{text}</blockquote>"
+        return super().apply_entity(entity, text)
+
+
+giveaway_html_decoration = GiveawayHtmlDecoration()
+
+
+def format_giveaway_text(text: str, entities=None) -> str:
+    rendered = giveaway_html_decoration.unparse(text, entities or [])
+    return re.sub(
+        r"(?m)^&gt; ?(.+)$",
+        lambda match: f"<blockquote>{match.group(1)}</blockquote>",
+        rendered,
+    )
 
 
 class AdminStates(StatesGroup):
@@ -113,7 +134,7 @@ def giveaway_actions(callback_value: str, status: str) -> InlineKeyboardMarkup:
         markup.add(
             InlineKeyboardButton("Статистика", callback_data=f"admin:stats:{callback_value}"),
             InlineKeyboardButton("Экспорт участников CSV", callback_data=f"admin:export:{callback_value}"),
-            InlineKeyboardButton("Выбрать победителя вручную", callback_data=f"admin:winner:manual:{callback_value}"),
+            InlineKeyboardButton("Предварительно выбрать победителя", callback_data=f"admin:winner:manual:{callback_value}"),
             InlineKeyboardButton("Завершить сейчас", callback_data=f"admin:finish:{callback_value}"),
             InlineKeyboardButton("Остановить", callback_data=f"admin:stop:{callback_value}"),
         )
@@ -418,6 +439,7 @@ async def create_giveaway_record(owner_id: int, data: dict) -> GiveAway:
         text=data["text"],
         photo_id=data.get("photo_id"),
         video_id=data.get("video_id"),
+        animation_id=data.get("animation_id"),
         over_date=over_date,
         captcha=data.get("captcha", False),
         winners_count=data["winners_count"],
@@ -473,11 +495,11 @@ async def finish_giveaway(giveaway: GiveAway, reason: str = "schedule") -> list[
         return await GiveawayWinner().get_winners(giveaway.callback_value)
 
     participants = await GiveawayParticipant().get_participants(giveaway.callback_value)
-    secure_random.shuffle(participants)
-
-    await GiveawayWinner().delete_winners(giveaway.callback_value)
+    winner_repo = GiveawayWinner()
+    preselected = await winner_repo.get_winners(giveaway.callback_value)
 
     if not participants:
+        await winner_repo.delete_winners(giveaway.callback_value)
         giveaway.run_status = False
         giveaway.finished_at = datetime.now(timezone_info)
         await giveaway.save()
@@ -485,11 +507,40 @@ async def finish_giveaway(giveaway: GiveAway, reason: str = "schedule") -> list[
         return []
 
     slots = winner_slots(giveaway)
-    selected = participants[: len(slots)]
+    participants_by_id = {participant["user_id"]: participant for participant in participants}
     winners = []
+    preselected_ids = set()
+    for winner in preselected:
+        participant = participants_by_id.get(winner["user_id"])
+        place = winner.get("place")
+        if not participant or place not in slots:
+            continue
+        slots.remove(place)
+        preselected_ids.add(winner["user_id"])
+        winners.append({**participant, "place": place, "is_reserve": False})
+
+    remaining_participants = [
+        participant for participant in participants
+        if participant["user_id"] not in preselected_ids
+    ]
+    secure_random.shuffle(remaining_participants)
+    selected = remaining_participants[: len(slots)]
+
+    await winner_repo.delete_winners(giveaway.callback_value)
+
+    for winner in winners:
+        await winner_repo.add_winner(
+            giveaway_callback_value=giveaway.callback_value,
+            user_id=winner["user_id"],
+            username=winner["username"],
+            first_name=winner["first_name"],
+            last_name=winner["last_name"],
+            place=winner["place"],
+            is_reserve=False,
+        )
 
     for place, participant in zip(slots, selected):
-        await GiveawayWinner().add_winner(
+        await winner_repo.add_winner(
             giveaway_callback_value=giveaway.callback_value,
             user_id=participant["user_id"],
             username=participant["username"],
@@ -499,6 +550,8 @@ async def finish_giveaway(giveaway: GiveAway, reason: str = "schedule") -> list[
             is_reserve=False,
         )
         winners.append({**participant, "place": place, "is_reserve": False})
+
+    winners.sort(key=lambda winner: winner["place"])
 
     giveaway.run_status = False
     giveaway.finished_at = datetime.now(timezone_info)
@@ -508,52 +561,20 @@ async def finish_giveaway(giveaway: GiveAway, reason: str = "schedule") -> list[
     return winners
 
 
-async def finish_giveaway_with_manual_winner(giveaway: GiveAway, manual_winner: dict) -> list[dict]:
-    if giveaway.finished_at:
-        return await GiveawayWinner().get_winners(giveaway.callback_value)
-
-    participants = await GiveawayParticipant().get_participants(giveaway.callback_value)
-    other_participants = [
-        participant for participant in participants
-        if participant["user_id"] != manual_winner["user_id"]
-    ]
-    secure_random.shuffle(other_participants)
-
-    await GiveawayWinner().delete_winners(giveaway.callback_value)
-
-    slots = winner_slots(giveaway)
-    manual_place = slots.pop(0) if slots else 1
-    winners = [{**manual_winner, "place": manual_place, "is_reserve": False}]
-    await GiveawayWinner().add_winner(
+async def preselect_manual_winner(giveaway: GiveAway, manual_winner: dict) -> dict:
+    winner_repo = GiveawayWinner()
+    await winner_repo.delete_winners(giveaway.callback_value)
+    await winner_repo.add_winner(
         giveaway_callback_value=giveaway.callback_value,
         user_id=manual_winner["user_id"],
         username=manual_winner["username"],
         first_name=manual_winner["first_name"],
         last_name=manual_winner["last_name"],
-        place=manual_place,
+        place=1,
         is_reserve=False,
     )
-
-    selected = other_participants[: len(slots)]
-
-    for place, participant in zip(slots, selected):
-        await GiveawayWinner().add_winner(
-            giveaway_callback_value=giveaway.callback_value,
-            user_id=participant["user_id"],
-            username=participant["username"],
-            first_name=participant["first_name"],
-            last_name=participant["last_name"],
-            place=place,
-            is_reserve=False,
-        )
-        winners.append({**participant, "place": place, "is_reserve": False})
-
-    giveaway.run_status = False
-    giveaway.finished_at = datetime.now(timezone_info)
-    await giveaway.save()
-    await notify_finish(giveaway, winners, len(participants), too_few=False)
-    logger.info("Giveaway %s finished with manual winner %s", giveaway.callback_value, manual_winner["user_id"])
-    return winners
+    logger.info("Giveaway %s preselected manual winner %s", giveaway.callback_value, manual_winner["user_id"])
+    return {**manual_winner, "place": 1, "is_reserve": False}
 
 
 async def notify_finish(giveaway: GiveAway, winners: list[dict], participants_count: int, too_few: bool):
@@ -752,6 +773,8 @@ async def publish_giveaway(giveaway: GiveAway) -> tuple[bool, str]:
 
     if giveaway.photo_id:
         sent = await bot.send_photo(giveaway.publish_channel_id, giveaway.photo_id, caption=text, reply_markup=reply_markup)
+    elif giveaway.animation_id:
+        sent = await bot.send_animation(giveaway.publish_channel_id, giveaway.animation_id, caption=text, reply_markup=reply_markup)
     elif giveaway.video_id:
         sent = await bot.send_video(giveaway.publish_channel_id, giveaway.video_id, caption=text, reply_markup=reply_markup)
     else:
@@ -843,29 +866,35 @@ async def create_name(message: types.Message, state: FSMContext):
         return
     await state.update_data(name=name)
     await AdminStates.create_text.set()
-    await message.answer("Введите текст розыгрыша. HTML-разметка поддерживается.", reply_markup=back_menu())
-
-
-@dp.message_handler(state=AdminStates.create_text)
-async def create_text(message: types.Message, state: FSMContext):
-    await state.update_data(text=message.html_text or message.text)
-    await AdminStates.create_media.set()
     await message.answer(
-        "Отправьте фото/видео для поста или напишите <code>нет</code>.",
+        "Введите текст розыгрыша. Форматирование Telegram сохранится. "
+        "Чтобы сделать отдельную строку-цитату, начните её с <code>&gt; </code>.",
         reply_markup=back_menu(),
     )
 
 
-@dp.message_handler(content_types=["photo", "video", "text"], state=AdminStates.create_media)
+@dp.message_handler(state=AdminStates.create_text)
+async def create_text(message: types.Message, state: FSMContext):
+    await state.update_data(text=format_giveaway_text(message.text or "", message.entities))
+    await AdminStates.create_media.set()
+    await message.answer(
+        "Отправьте фото, видео или GIF для поста либо напишите <code>нет</code>.",
+        reply_markup=back_menu(),
+    )
+
+
+@dp.message_handler(content_types=["photo", "video", "animation", "text"], state=AdminStates.create_media)
 async def create_media(message: types.Message, state: FSMContext):
     if message.content_type == "photo":
-        await state.update_data(photo_id=message.photo[-1].file_id, video_id=None)
+        await state.update_data(photo_id=message.photo[-1].file_id, video_id=None, animation_id=None)
     elif message.content_type == "video":
-        await state.update_data(photo_id=None, video_id=message.video.file_id)
+        await state.update_data(photo_id=None, video_id=message.video.file_id, animation_id=None)
+    elif message.content_type == "animation":
+        await state.update_data(photo_id=None, video_id=None, animation_id=message.animation.file_id)
     elif message.text and message.text.lower().strip() in ("нет", "no", "-"):
-        await state.update_data(photo_id=None, video_id=None)
+        await state.update_data(photo_id=None, video_id=None, animation_id=None)
     else:
-        await message.answer("Отправьте фото/видео или напишите <code>нет</code>.")
+        await message.answer("Отправьте фото, видео, GIF или напишите <code>нет</code>.")
         return
 
     await AdminStates.create_end_at.set()
@@ -934,6 +963,7 @@ async def create_captcha(callback: types.CallbackQuery, state: FSMContext):
     await state.finish()
     await callback.message.edit_text("Розыгрыш создан. Теперь настройте канал публикации и условия.")
     await callback.message.answer(await render_giveaway(giveaway), reply_markup=giveaway_actions(giveaway.callback_value, "draft"))
+    await callback.answer()
 
 
 @dp.callback_query_handler(lambda c: c.data.startswith("admin:list:"), state="*")
@@ -1108,7 +1138,8 @@ async def ask_manual_winner(callback: types.CallbackQuery, state: FSMContext):
         "Отправьте username участника, которого нужно назначить победителем на первое место.\n\n"
         "Пример: <code>@username</code>\n\n"
         "Важно: пользователь уже должен быть среди участников этого розыгрыша. "
-        "Остальные призовые места бот заполнит автоматически из других участников.",
+        "Конкурс после выбора продолжится. Остальные призовые места бот заполнит "
+        "автоматически только при завершении конкурса.",
         reply_markup=back_menu(f"admin:show:{giveaway_id}"),
     )
 
@@ -1148,12 +1179,16 @@ async def manual_winner_message(message: types.Message, state: FSMContext):
         )
         return
 
-    await finish_giveaway_with_manual_winner(giveaway, manual_winner)
+    await preselect_manual_winner(giveaway, manual_winner)
     await state.finish()
-    await message.answer(f"Победитель первого места назначен вручную: {user_label(manual_winner)}")
+    await message.answer(
+        f"Победитель первого места предварительно выбран: {user_label(manual_winner)}\n\n"
+        "Розыгрыш остается активным и продолжает принимать участников. "
+        "Победители будут опубликованы только после завершения конкурса."
+    )
     await message.answer(
         await render_giveaway(await get_giveaway(giveaway.callback_value)),
-        reply_markup=giveaway_actions(giveaway.callback_value, "finished"),
+        reply_markup=giveaway_actions(giveaway.callback_value, "active"),
     )
 
 
@@ -1293,6 +1328,25 @@ async def fallback(message: types.Message, state: FSMContext):
             await message.answer(start_text, reply_markup=main_menu())
     else:
         await message.answer("Это бот для участия в розыгрышах. Нажмите кнопку участия в посте розыгрыша.")
+
+
+@dp.errors_handler()
+async def handle_update_error(update: types.Update, exception: Exception):
+    logger.error(
+        "Unhandled Telegram update error",
+        exc_info=(type(exception), exception, exception.__traceback__),
+    )
+    try:
+        if update.callback_query:
+            await update.callback_query.answer(
+                "Не удалось выполнить действие. Ошибка записана в лог бота.",
+                show_alert=True,
+            )
+        elif update.message:
+            await update.message.answer("Не удалось выполнить действие. Ошибка записана в лог бота.")
+    except Exception:
+        logger.exception("Could not notify user about update error")
+    return True
 
 
 async def manage_active_giveaways():

@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import sqlite3
 from pathlib import Path
 from unittest.mock import patch
 
@@ -11,7 +12,9 @@ class ControlPanelTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             db_path = tmp_path / "giveaway.sqlite3"
-            db_path.write_text("database", encoding="utf-8")
+            with sqlite3.connect(db_path) as connection:
+                connection.execute("CREATE TABLE sample (value TEXT)")
+                connection.execute("INSERT INTO sample VALUES ('database')")
             backup_dir = tmp_path / "backups"
 
             with patch.object(control_panel, "BACKUP_DIR", backup_dir):
@@ -22,7 +25,9 @@ class ControlPanelTest(unittest.TestCase):
             self.assertIn("Backup базы создан", message)
             backups = list(backup_dir.glob("giveaway-*.sqlite3"))
             self.assertEqual(len(backups), 1)
-            self.assertEqual(backups[0].read_text(encoding="utf-8"), "database")
+            with sqlite3.connect(backups[0]) as connection:
+                value = connection.execute("SELECT value FROM sample").fetchone()[0]
+            self.assertEqual(value, "database")
 
     def test_clear_saved_token_keeps_other_settings(self):
         saved = {}
@@ -47,8 +52,9 @@ class ControlPanelTest(unittest.TestCase):
             with patch.object(control_panel, "check_token_valid", return_value=(True, "токен валиден")):
                 message = control_panel.check_environment()
 
-        self.assertIn("Python найден", message)
+        self.assertIn("Python бота", message)
         self.assertIn("Зависимости установлены", message)
+        self.assertIn("Часовой пояс Europe/Moscow", message)
         self.assertIn("Токен валиден: да", message)
         self.assertIn("База доступна", message)
 
