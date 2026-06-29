@@ -271,14 +271,22 @@ def install_dependencies() -> str:
     ok, output = run_command(command, timeout=600)
     if not ok and "Missing dependencies for SOCKS support" in output:
         clean_env = os.environ.copy()
-        removed = []
         for key in PROXY_ENV_KEYS:
-            if clean_env.get(key, "").lower().startswith(("socks://", "socks5://", "socks5h://")):
-                removed.append(key)
-                clean_env.pop(key, None)
-        if removed:
-            log("Retrying pip without broken SOCKS proxy variables: " + ", ".join(removed))
-            ok, output = run_command(command, env=clean_env, timeout=600)
+            clean_env.pop(key, None)
+        clean_env.pop("PIP_PROXY", None)
+        clean_env.pop("pip_proxy", None)
+        clean_env["PIP_CONFIG_FILE"] = os.devnull
+        isolated_command = [
+            str(py),
+            "-m",
+            "pip",
+            "--isolated",
+            "install",
+            "-r",
+            "requirements.txt",
+        ]
+        log("Retrying pip in isolated mode without SOCKS or user pip configuration")
+        ok, output = run_command(isolated_command, env=clean_env, timeout=600)
     if not ok:
         return "Не удалось установить зависимости.\n" + output
 

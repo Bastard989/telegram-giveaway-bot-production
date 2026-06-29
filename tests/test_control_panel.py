@@ -8,6 +8,36 @@ import control_panel
 
 
 class ControlPanelTest(unittest.TestCase):
+    def test_install_dependencies_retries_socks_error_in_isolated_mode(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            (tmp_path / ".venv").mkdir()
+            python = tmp_path / ".venv" / "python.exe"
+            socks_error = "ERROR: Missing dependencies for SOCKS support"
+
+            with patch.object(control_panel, "BASE_DIR", tmp_path):
+                with patch.object(control_panel, "python_executable", return_value=python):
+                    with patch.object(control_panel, "supported_python", return_value=(True, "3.11.9")):
+                        with patch.object(
+                            control_panel,
+                            "run_command",
+                            side_effect=[(False, socks_error), (True, "installed")],
+                        ) as run_command:
+                            with patch.dict(
+                                control_panel.os.environ,
+                                {"ALL_PROXY": "socks5://127.0.0.1:1080", "PIP_PROXY": "socks5://127.0.0.1:1080"},
+                                clear=False,
+                            ):
+                                message = control_panel.install_dependencies()
+
+            self.assertIn("Зависимости установлены", message)
+            retry_command = run_command.call_args_list[1].args[0]
+            retry_env = run_command.call_args_list[1].kwargs["env"]
+            self.assertIn("--isolated", retry_command)
+            self.assertNotIn("ALL_PROXY", retry_env)
+            self.assertNotIn("PIP_PROXY", retry_env)
+            self.assertEqual(retry_env["PIP_CONFIG_FILE"], control_panel.os.devnull)
+
     def test_backup_database_copies_sqlite_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
