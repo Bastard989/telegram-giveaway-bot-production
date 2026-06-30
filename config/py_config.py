@@ -43,6 +43,7 @@ OWNER_USERNAMES = {
 }
 
 bot_token = os.getenv("BOT_TOKEN", "")
+bot_proxy = os.getenv("BOT_PROXY", "").strip()
 database_url = os.getenv("DATABASE_URL", "")
 timezone_info = pytz.timezone(os.getenv("TIMEZONE", "Europe/Moscow"))
 

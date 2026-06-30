@@ -33,7 +33,8 @@ if missing_config:
 
 bot = Bot(
     token=bot_token,
-    parse_mode=ParseMode.HTML
+    parse_mode=ParseMode.HTML,
+    proxy=bot_proxy or None,
 )
 
 storage = JSONStorage("fsm_state.json")

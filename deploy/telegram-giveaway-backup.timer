@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily backup of Telegram Giveaway Bot database
+
+[Timer]
+OnCalendar=*-*-* 03:15:00
+Persistent=true
+RandomizedDelaySec=15m
+Unit=telegram-giveaway-backup.service
+
+[Install]
+WantedBy=timers.target
