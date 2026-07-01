@@ -1,5 +1,7 @@
 import csv
+import html
 import os
+import re
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -53,6 +55,46 @@ class FakeWinnerRepo:
 
 
 class BusinessLogicTest(unittest.IsolatedAsyncioTestCase):
+    def test_long_telegram_html_is_split_into_valid_chunks(self):
+        source = "<b>Начало &amp; тест</b>\n<blockquote>" + ("длинный текст " * 80) + "</blockquote>"
+
+        chunks = production.split_telegram_html(source, limit=180)
+
+        self.assertGreater(len(chunks), 1)
+        for chunk in chunks:
+            visible = html.unescape(re.sub(r"<[^>]+>", "", chunk))
+            self.assertLessEqual(production.telegram_text_units(visible), 180)
+            self.assertEqual(chunk.count("<blockquote>"), chunk.count("</blockquote>"))
+            self.assertEqual(chunk.count("<b>"), chunk.count("</b>"))
+        original_visible = html.unescape(re.sub(r"<[^>]+>", "", source))
+        chunked_visible = "".join(html.unescape(re.sub(r"<[^>]+>", "", chunk)) for chunk in chunks)
+        self.assertEqual(chunked_visible, original_visible)
+
+    async def test_long_animation_description_is_sent_as_separate_messages(self):
+        giveaway = SimpleNamespace(
+            publish_channel_id=-100123,
+            photo_id=None,
+            animation_id="gif-file-id",
+            video_id=None,
+        )
+        media_message = SimpleNamespace(chat=SimpleNamespace(id=-100123), message_id=10)
+        text_messages = [
+            SimpleNamespace(chat=SimpleNamespace(id=-100123), message_id=11),
+            SimpleNamespace(chat=SimpleNamespace(id=-100123), message_id=12),
+        ]
+        markup = object()
+        long_text = "<blockquote>" + ("текст " * 900) + "</blockquote>"
+
+        with patch.object(production.bot, "send_animation", new=AsyncMock(return_value=media_message)) as send_animation:
+            with patch.object(production.bot, "send_message", new=AsyncMock(side_effect=text_messages)) as send_message:
+                sent = await production.send_giveaway_messages(giveaway, long_text, markup)
+
+        self.assertEqual(sent.message_id, 12)
+        send_animation.assert_awaited_once_with(-100123, "gif-file-id", caption=None, reply_markup=None)
+        self.assertEqual(send_message.await_count, 2)
+        self.assertIsNone(send_message.await_args_list[0].kwargs["reply_markup"])
+        self.assertIs(send_message.await_args_list[-1].kwargs["reply_markup"], markup)
+
     def test_giveaway_text_supports_quote_prefix_and_formatting(self):
         text = "Заголовок\n> Строка с цитатой"
         bold = SimpleNamespace(type="bold", offset=0, length=9)

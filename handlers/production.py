@@ -7,6 +7,7 @@ import random
 import re
 import string
 from datetime import datetime
+from html.parser import HTMLParser
 from pathlib import Path
 
 from aiogram import types
@@ -49,6 +50,8 @@ class GiveawayHtmlDecoration(HtmlDecoration):
 
 
 giveaway_html_decoration = GiveawayHtmlDecoration()
+TELEGRAM_CAPTION_LIMIT = 1024
+TELEGRAM_MESSAGE_LIMIT = 4096
 
 
 def format_giveaway_text(text: str, entities=None) -> str:
@@ -58,6 +61,110 @@ def format_giveaway_text(text: str, entities=None) -> str:
         lambda match: f"<blockquote>{match.group(1)}</blockquote>",
         rendered,
     )
+
+
+def telegram_text_units(value: str) -> int:
+    """Telegram measures text limits in UTF-16 code units."""
+    return len(value.encode("utf-16-le")) // 2
+
+
+class TelegramHtmlSplitter(HTMLParser):
+    """Split trusted Telegram HTML while keeping every chunk valid HTML."""
+
+    def __init__(self, limit: int):
+        super().__init__(convert_charrefs=False)
+        self.limit = limit
+        self.chunks: list[str] = []
+        self.parts: list[str] = []
+        self.open_tags: list[tuple[str, str]] = []
+        self.units = 0
+
+    def _flush(self):
+        if not self.units:
+            return
+        closing = "".join(f"</{tag}>" for tag, _ in reversed(self.open_tags))
+        self.chunks.append("".join(self.parts) + closing)
+        self.parts = [raw for _, raw in self.open_tags]
+        self.units = 0
+
+    def _prefix_length(self, value: str, available: int) -> int:
+        used = 0
+        index = 0
+        for index, character in enumerate(value, start=1):
+            character_units = telegram_text_units(character)
+            if used + character_units > available:
+                return index - 1
+            used += character_units
+        return index
+
+    def _add_visible(self, raw: str, visible: str):
+        if not raw:
+            return
+        if telegram_text_units(visible) > self.limit and raw != visible:
+            # Entities are atomic and normally one visible character.
+            raise ValueError("HTML entity exceeds Telegram message limit")
+
+        remaining_raw = raw
+        remaining_visible = visible
+        while remaining_raw:
+            available = self.limit - self.units
+            visible_cut = self._prefix_length(remaining_visible, available)
+            if not visible_cut:
+                self._flush()
+                continue
+
+            raw_cut = visible_cut if raw == visible else len(remaining_raw)
+            if raw == visible and visible_cut < len(remaining_visible):
+                whitespace = max(
+                    remaining_visible.rfind("\n", 0, visible_cut),
+                    remaining_visible.rfind(" ", 0, visible_cut),
+                )
+                if whitespace >= max(1, visible_cut // 2):
+                    raw_cut = visible_cut = whitespace + 1
+
+            raw_piece = remaining_raw[:raw_cut]
+            visible_piece = remaining_visible[:visible_cut]
+            self.parts.append(raw_piece)
+            self.units += telegram_text_units(visible_piece)
+            remaining_raw = remaining_raw[raw_cut:]
+            remaining_visible = remaining_visible[visible_cut:]
+            if remaining_raw:
+                self._flush()
+
+    def handle_starttag(self, tag: str, attrs):
+        raw = self.get_starttag_text()
+        self.parts.append(raw)
+        self.open_tags.append((tag, raw))
+
+    def handle_startendtag(self, tag: str, attrs):
+        self.parts.append(self.get_starttag_text())
+
+    def handle_endtag(self, tag: str):
+        self.parts.append(f"</{tag}>")
+        if self.open_tags and self.open_tags[-1][0] == tag:
+            self.open_tags.pop()
+
+    def handle_data(self, data: str):
+        self._add_visible(data, data)
+
+    def handle_entityref(self, name: str):
+        raw = f"&{name};"
+        self._add_visible(raw, html.unescape(raw))
+
+    def handle_charref(self, name: str):
+        raw = f"&#{name};"
+        self._add_visible(raw, html.unescape(raw))
+
+    def finish(self) -> list[str]:
+        self.close()
+        self._flush()
+        return self.chunks
+
+
+def split_telegram_html(value: str, limit: int = TELEGRAM_MESSAGE_LIMIT) -> list[str]:
+    splitter = TelegramHtmlSplitter(limit)
+    splitter.feed(value)
+    return splitter.finish()
 
 
 class AdminStates(StatesGroup):
@@ -735,6 +842,73 @@ async def register_discussion_group(message: types.Message, state: FSMContext):
     await message.answer(await render_giveaway(await get_giveaway(giveaway.callback_value)), reply_markup=giveaway_actions(giveaway.callback_value, "draft"))
 
 
+async def send_giveaway_media(
+    giveaway: GiveAway,
+    caption: str | None = None,
+    reply_markup: InlineKeyboardMarkup | None = None,
+) -> types.Message | None:
+    if giveaway.photo_id:
+        return await bot.send_photo(
+            giveaway.publish_channel_id,
+            giveaway.photo_id,
+            caption=caption,
+            reply_markup=reply_markup,
+        )
+    if giveaway.animation_id:
+        return await bot.send_animation(
+            giveaway.publish_channel_id,
+            giveaway.animation_id,
+            caption=caption,
+            reply_markup=reply_markup,
+        )
+    if giveaway.video_id:
+        return await bot.send_video(
+            giveaway.publish_channel_id,
+            giveaway.video_id,
+            caption=caption,
+            reply_markup=reply_markup,
+        )
+    return None
+
+
+async def send_giveaway_messages(
+    giveaway: GiveAway,
+    text: str,
+    reply_markup: InlineKeyboardMarkup | None,
+) -> types.Message:
+    """Publish one media post or a safe sequence for long descriptions."""
+    sent_messages: list[types.Message] = []
+    has_media = bool(giveaway.photo_id or giveaway.animation_id or giveaway.video_id)
+    caption_chunks = split_telegram_html(text, TELEGRAM_CAPTION_LIMIT)
+
+    try:
+        if has_media and len(caption_chunks) == 1:
+            sent = await send_giveaway_media(giveaway, text, reply_markup)
+            sent_messages.append(sent)
+            return sent
+
+        if has_media:
+            media_message = await send_giveaway_media(giveaway)
+            sent_messages.append(media_message)
+
+        text_chunks = split_telegram_html(text, TELEGRAM_MESSAGE_LIMIT)
+        for index, chunk in enumerate(text_chunks):
+            sent = await bot.send_message(
+                giveaway.publish_channel_id,
+                chunk,
+                reply_markup=reply_markup if index == len(text_chunks) - 1 else None,
+            )
+            sent_messages.append(sent)
+        return sent_messages[-1]
+    except Exception:
+        for message in reversed(sent_messages):
+            try:
+                await bot.delete_message(message.chat.id, message.message_id)
+            except Exception:
+                logger.exception("Failed to clean up partially published giveaway message")
+        raise
+
+
 async def publish_giveaway(giveaway: GiveAway) -> tuple[bool, str]:
     if giveaway.run_status:
         return False, "Розыгрыш уже запущен."
@@ -771,14 +945,7 @@ async def publish_giveaway(giveaway: GiveAway) -> tuple[bool, str]:
         text += f"\n\nДля участия напишите в комментариях: <code>{text_for_participation_in_comments_giveaways}</code>"
         reply_markup = conditions_markup(conditions)
 
-    if giveaway.photo_id:
-        sent = await bot.send_photo(giveaway.publish_channel_id, giveaway.photo_id, caption=text, reply_markup=reply_markup)
-    elif giveaway.animation_id:
-        sent = await bot.send_animation(giveaway.publish_channel_id, giveaway.animation_id, caption=text, reply_markup=reply_markup)
-    elif giveaway.video_id:
-        sent = await bot.send_video(giveaway.publish_channel_id, giveaway.video_id, caption=text, reply_markup=reply_markup)
-    else:
-        sent = await bot.send_message(giveaway.publish_channel_id, text, reply_markup=reply_markup)
+    sent = await send_giveaway_messages(giveaway, text, reply_markup)
 
     post_link = f"{await sent.chat.get_url()}/{sent.message_id}"
     await TelegramChannel.filter(give_callback_value=giveaway.callback_value, role="publish").update(post_id=sent.message_id)
